@@ -4,6 +4,24 @@
 
 No es un procesador de texto genérico ni una máquina que decide qué es verdad. Ayuda a ordenar el trabajo intelectual para que cada capítulo tenga un propósito, cada afirmación pueda volver a una fuente y cada duda quede visible.
 
+## Explicado sin tecnicismos
+
+Cronista es una mesa de trabajo para investigar y escribir libros, ensayos y otros proyectos largos.
+
+Permite reunir libros, PDFs, apuntes y entrevistas; ordenar qué aporta cada fuente; guardar fragmentos importantes con su página; separar los hechos de las interpretaciones; organizar capítulos y redactar el manuscrito.
+
+También incluye un mapa de trazabilidad para saber de dónde sale cada afirmación y una auditoría editorial que señala qué partes necesitan más respaldo o revisión.
+
+Aunque el menú parezca amplio, no hace falta usar todo desde el principio. Se puede empezar de manera muy simple:
+
+1. Crear un proyecto.
+2. Agregar una fuente, incluso un PDF.
+3. Registrar una idea o evidencia.
+4. Organizar un capítulo.
+5. Escribir y revisar.
+
+Cronista funciona localmente en el navegador: tus textos y documentos no se suben automáticamente a internet. La herramienta acompaña el proceso desde la primera lectura hasta un manuscrito más claro, ordenado y verificable.
+
 ## Para qué sirve
 
 Cronista puede servirte si estás:
@@ -22,24 +40,6 @@ El recorrido básico es sencillo:
 4. **Escribir:** redactás el manuscrito por capítulo, con la arquitectura y las fuentes a la vista.
 5. **Rastrear:** seguís afirmaciones, fuentes, ubicaciones y capítulos desde el mapa de trazabilidad.
 6. **Revisar y exportar:** usás el auditor editorial, el modo estudio y las exportaciones Markdown/JSON.
-
-## Explicado sin tecnicismos
-
-Cronista es una mesa de trabajo para investigar y escribir libros.
-
-Permite reunir libros, PDFs, apuntes y entrevistas; ordenar qué aporta cada fuente; guardar fragmentos importantes con su página; separar los hechos de las interpretaciones; organizar capítulos y redactar el manuscrito.
-
-También incluye un mapa de trazabilidad para saber de dónde sale cada afirmación y una auditoría editorial que señala qué partes necesitan más respaldo o revisión.
-
-Aunque el menú parezca amplio, no hace falta usar todo desde el principio. Se puede empezar de manera muy simple:
-
-1. Crear un proyecto.
-2. Agregar una fuente, incluso un PDF.
-3. Registrar una idea o evidencia.
-4. Organizar un capítulo.
-5. Escribir y revisar.
-
-Cronista funciona localmente en el navegador: tus textos y documentos no se suben automáticamente a internet. La herramienta acompaña el proceso desde la primera lectura hasta un manuscrito más claro, ordenado y verificable.
 
 ## Qué incluye esta versión
 
@@ -72,7 +72,9 @@ Es un segundo ejemplo en español para mostrar el flujo con una novela históric
 
 ## Privacidad y límites
 
-La aplicación funciona como herramienta local y guarda los proyectos en IndexedDB, un almacenamiento del navegador preparado para datos locales más grandes. `localStorage` se usa para compatibilidad y para migrar bibliotecas antiguas; no se sube automáticamente el contenido a internet ni se necesita una cuenta para abrirla.
+La aplicación funciona como herramienta local y guarda los proyectos en IndexedDB, un almacenamiento del navegador preparado para datos locales más grandes. `localStorage` se usa para compatibilidad y para migrar bibliotecas antiguas; no se necesita una cuenta para abrirla.
+
+La aplicación no realiza conexiones externas para enviar datos, analítica o contenido del usuario. Cuando la abrís desde GitHub Pages, el navegador descarga la aplicación y sus archivos necesarios desde el propio sitio; eso no implica que la biblioteca local se envíe de vuelta.
 
 El estado de guardado aparece dentro de la aplicación. Si el navegador rechaza un guardado, Cronista lo informa y recomienda exportar una copia JSON. Para material importante, mantené igualmente copias externas periódicas.
 
