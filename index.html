@@ -24,12 +24,18 @@
           <select id="project-selector" class="project-selector" aria-label="Elegir proyecto"></select>
           <div id="sidebar-project-kind" class="muted"></div>
           <button class="text-button project-new-button" data-action="open-project-dialog">+ Nuevo proyecto</button>
+          <div class="project-actions" aria-label="Mantenimiento del proyecto">
+            <button class="text-button" data-action="rename-project">Renombrar</button>
+            <button class="text-button" data-action="archive-project">Archivar</button>
+            <button class="text-button danger-text" data-action="delete-project">Eliminar</button>
+          </div>
         </div>
 
         <nav id="main-nav" class="main-nav" aria-label="Secciones del proyecto">
           <button class="nav-item active" data-action="view" data-view="overview"><span class="nav-icon">⌂</span> Panorama</button>
           <button class="nav-item" data-action="view" data-view="sources"><span class="nav-icon">◫</span> Fuentes <span id="nav-source-count" class="nav-count"></span></button>
           <button class="nav-item" data-action="view" data-view="evidence"><span class="nav-icon">▤</span> Evidencias <span id="nav-evidence-count" class="nav-count"></span></button>
+          <button class="nav-item" data-action="view" data-view="traceability"><span class="nav-icon">⌁</span> Trazabilidad <span id="nav-traceability-count" class="nav-count"></span></button>
           <button class="nav-item" data-action="view" data-view="structure"><span class="nav-icon">☷</span> Arquitectura <span id="nav-chapter-count" class="nav-count"></span></button>
           <button class="nav-item" data-action="view" data-view="manuscript"><span class="nav-icon">✎</span> Manuscrito</button>
           <button class="nav-item" data-action="view" data-view="audit"><span class="nav-icon">✓</span> Auditor editorial</button>
@@ -40,6 +46,7 @@
           <div class="privacy-card">
             <div class="privacy-title"><span class="status-dot"></span> Local por diseño</div>
             <p>Tus proyectos se guardan en este navegador. Cronista no sube tus textos automáticamente.</p>
+            <div id="storage-status" class="storage-status pending" role="status" aria-live="polite">Preparando guardado local…</div>
           </div>
           <button class="text-button" data-action="reset-demo">Restaurar proyecto de prueba</button>
           <button class="text-button" data-action="import-json">Importar copia JSON</button>
@@ -65,10 +72,11 @@
 
     <dialog id="source-dialog" class="source-dialog">
       <form id="source-form" method="dialog">
+        <input type="hidden" name="sourceId" value="" />
         <div class="dialog-header">
           <div>
-            <div class="eyebrow">Nueva fuente</div>
-            <h2>Sumar material al proyecto</h2>
+            <div class="eyebrow" id="source-dialog-kicker">Nueva fuente</div>
+            <h2 id="source-dialog-title">Sumar material al proyecto</h2>
           </div>
           <button class="icon-button" value="cancel" formnovalidate aria-label="Cerrar">×</button>
         </div>
@@ -78,11 +86,20 @@
           <label>Autor o procedencia<input name="author" placeholder="Quién o de dónde proviene" /></label>
         </div>
         <label>Referencia local o enlace<input name="location" placeholder="Ruta, URL o nota de ubicación" /></label>
+        <label>URL pública (opcional)<input name="url" type="url" placeholder="https://…" /></label>
+        <div class="form-grid">
+          <label>Edición<input name="edition" placeholder="Ej. 3.ª edición revisada" /></label>
+          <label>Editorial o institución<input name="publisher" placeholder="Quién publica o conserva el material" /></label>
+        </div>
+        <div class="form-grid">
+          <label>Año<input name="year" inputmode="numeric" placeholder="Ej. 1888" /></label>
+          <label>Fecha de consulta<input name="accessedAt" type="date" /></label>
+        </div>
         <label>Nota de trabajo<textarea name="note" rows="3" placeholder="Qué aporta esta fuente y qué conviene revisar"></textarea></label>
         <label>Contenido del texto (opcional)<textarea name="content" rows="6" placeholder="Pegá acá el texto si no lo vas a importar como archivo"></textarea></label>
         <div class="dialog-actions">
           <button class="button secondary" value="cancel" formnovalidate>Cancelar</button>
-          <button class="button primary" value="default">Guardar fuente</button>
+          <button id="source-dialog-submit" class="button primary" value="default">Guardar fuente</button>
         </div>
       </form>
     </dialog>

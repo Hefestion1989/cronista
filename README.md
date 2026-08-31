@@ -20,7 +20,8 @@ El recorrido básico es sencillo:
 2. **Distinguir:** registrás hechos, inferencias, hipótesis y criterios editoriales.
 3. **Armar:** organizás capítulos con propósito, páginas, estado y fuentes conectadas.
 4. **Escribir:** redactás el manuscrito por capítulo, con la arquitectura y las fuentes a la vista.
-5. **Revisar y exportar:** usás el auditor editorial, el modo estudio y las exportaciones Markdown/JSON.
+5. **Rastrear:** seguís afirmaciones, fuentes, ubicaciones y capítulos desde el mapa de trazabilidad.
+6. **Revisar y exportar:** usás el auditor editorial, el modo estudio y las exportaciones Markdown/JSON.
 
 ## Qué incluye esta versión
 
@@ -31,9 +32,12 @@ El recorrido básico es sencillo:
 - Importación de TXT, Markdown, CSV, JSON, JSONL y PDF como referencia local.
 - Conservación local del contenido completo de archivos de texto importados.
 - Registro de evidencias con fuente, ubicación, fragmento de respaldo, clasificación, estado y notas.
+- Mapa de trazabilidad que conecta afirmaciones, evidencias, fuentes y capítulos relacionados.
 - Búsqueda dentro de fuentes y evidencias.
+- Edición y eliminación de fuentes y evidencias, además de renombrar, archivar y eliminar proyectos.
+- Ficha bibliográfica básica con edición, editorial o institución, año y fecha de consulta.
 - Arquitectura de capítulos y editor de manuscrito con recuento de palabras.
-- Auditoría mecánica para detectar capítulos sin propósito, fuentes desconectadas, desarrollo insuficiente y respaldos ausentes.
+- Auditoría mecánica para detectar capítulos sin propósito, fuentes desconectadas, afirmaciones sin fuente, desarrollo insuficiente y respaldos ausentes.
 - Modo estudio con preguntas de lectura activa.
 - Exportación del proyecto a Markdown y copia completa `.cronista.json`.
 
@@ -49,7 +53,9 @@ Es un segundo ejemplo en español para mostrar el flujo con una novela históric
 
 ## Privacidad y límites
 
-La aplicación funciona como herramienta local y guarda la biblioteca en el `localStorage` del navegador. No sube automáticamente el contenido a internet ni necesita una cuenta para abrirse.
+La aplicación funciona como herramienta local y guarda los proyectos en IndexedDB, un almacenamiento del navegador preparado para datos locales más grandes. `localStorage` se usa para compatibilidad y para migrar bibliotecas antiguas; no se sube automáticamente el contenido a internet ni se necesita una cuenta para abrirla.
+
+El estado de guardado aparece dentro de la aplicación. Si el navegador rechaza un guardado, Cronista lo informa y recomienda exportar una copia JSON. Para material importante, mantené igualmente copias externas periódicas.
 
 Esto no equivale a cifrado: otros procesos con acceso a la sesión de Windows podrían leer esos datos. Antes de publicar una copia, revisá las fuentes, las rutas, los textos importados y cualquier material privado.
 

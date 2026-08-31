@@ -1,4 +1,16 @@
 const STORAGE_KEY = "cronista-project-v1";
+const STORAGE_DB_NAME = "cronista-library";
+const STORAGE_DB_VERSION = 1;
+const STORAGE_PROJECT_STORE = "projects";
+const STORAGE_META_STORE = "meta";
+
+let storageDb = null;
+let storageMode = "starting";
+let storageState = "starting";
+let storageError = "";
+let lastSavedAt = null;
+let storageReady = Promise.resolve();
+let saveQueue = Promise.resolve();
 
 const starterProject = {
   project: {
@@ -326,16 +338,17 @@ function normalizeProject(project) {
   const targetWords = Number(normalized.project.targetWords);
   normalized.project.targetWords = Number.isFinite(targetWords) && targetWords >= 100 ? Math.round(targetWords) : 12000;
   normalized.project.updatedAt = normalized.project.updatedAt || new Date().toISOString();
+  normalized.project.archived = Boolean(normalized.project.archived);
   normalized.sources = Array.isArray(normalized.sources) ? normalized.sources : [];
   normalized.sources = normalized.sources.map((source, index) => {
     const item = source && typeof source === "object" ? source : {};
     const content = String(item.content || "");
     const storedWordCount = Number(item.wordCount);
-    return { ...item, id: String(item.id || newId(`source-${index + 1}`)).trim(), title: String(item.title || "Fuente sin título").trim(), kind: String(item.kind || "Fuente").trim(), author: String(item.author || "Procedencia no indicada").trim(), location: String(item.location || "").trim(), pages: String(item.pages || "Sin paginar").trim(), note: String(item.note || "").trim(), excerpt: String(item.excerpt || "").trim(), content, wordCount: Number.isFinite(storedWordCount) && storedWordCount >= 0 ? Math.round(storedWordCount) : wordCount(content), imported: Boolean(item.imported) };
+    return { ...item, id: String(item.id || newId(`source-${index + 1}`)).trim(), title: String(item.title || "Fuente sin título").trim(), kind: String(item.kind || "Fuente").trim(), author: String(item.author || "Procedencia no indicada").trim(), location: String(item.location || "").trim(), url: String(item.url || "").trim(), edition: String(item.edition || "").trim(), publisher: String(item.publisher || "").trim(), year: String(item.year || "").trim(), accessedAt: String(item.accessedAt || "").trim(), pages: String(item.pages || "Sin paginar").trim(), note: String(item.note || "").trim(), excerpt: String(item.excerpt || "").trim(), content, wordCount: Number.isFinite(storedWordCount) && storedWordCount >= 0 ? Math.round(storedWordCount) : wordCount(content), imported: Boolean(item.imported), archived: Boolean(item.archived) };
   });
   normalized.evidence = Array.isArray(normalized.evidence) ? normalized.evidence.map((evidence, index) => {
     const item = evidence && typeof evidence === "object" ? evidence : {};
-    return { ...item, id: String(item.id || newId(`evidence-${index + 1}`)).trim(), statement: String(item.statement || "").trim(), type: String(item.type || "Hipótesis").trim(), sourceId: String(item.sourceId || "").trim(), location: String(item.location || "").trim(), status: String(item.status || "Por revisar").trim(), note: String(item.note || "").trim(), supportingText: String(item.supportingText || "").trim() };
+    return { ...item, id: String(item.id || newId(`evidence-${index + 1}`)).trim(), statement: String(item.statement || "").trim(), type: String(item.type || "Hipótesis").trim(), sourceId: String(item.sourceId || "").trim(), location: String(item.location || "").trim(), status: String(item.status || "Por revisar").trim(), note: String(item.note || "").trim(), supportingText: String(item.supportingText || "").trim(), archived: Boolean(item.archived) };
   }) : [];
   const isStarterProject = normalized.project.id === starterProject.project.id || normalized.project.title === starterProject.project.title;
   if (isStarterProject && (!hadEvidenceField || normalized.evidence.length === 0)) normalized.evidence = JSON.parse(JSON.stringify(starterProject.evidence));
@@ -373,11 +386,208 @@ function withPublicDemos(workspace) {
   return workspace;
 }
 
-function persist() {
+function idbRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("No se pudo acceder al almacenamiento local."));
+  });
+}
+
+function openStorageDatabase() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("Este navegador no ofrece IndexedDB."));
+      return;
+    }
+    const request = window.indexedDB.open(STORAGE_DB_NAME, STORAGE_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(STORAGE_PROJECT_STORE)) database.createObjectStore(STORAGE_PROJECT_STORE, { keyPath: "id" });
+      if (!database.objectStoreNames.contains(STORAGE_META_STORE)) database.createObjectStore(STORAGE_META_STORE, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("No se pudo abrir el almacenamiento local."));
+  });
+}
+
+async function readIndexedDbWorkspace(database) {
+  const projects = await idbRequest(database.transaction(STORAGE_PROJECT_STORE, "readonly").objectStore(STORAGE_PROJECT_STORE).getAll());
+  const active = await idbRequest(database.transaction(STORAGE_META_STORE, "readonly").objectStore(STORAGE_META_STORE).get("activeProjectId"));
+  return { activeProjectId: active?.value || projects[0]?.id || "", projects: projects.map((record) => normalizeProject(record?.data || record)) };
+}
+
+async function writeAllProjectsToIndexedDb(nextWorkspace) {
+  const transaction = storageDb.transaction([STORAGE_PROJECT_STORE, STORAGE_META_STORE], "readwrite");
+  const projectsStore = transaction.objectStore(STORAGE_PROJECT_STORE);
+  const metaStore = transaction.objectStore(STORAGE_META_STORE);
+  projectsStore.clear();
+  nextWorkspace.projects.map(normalizeProject).forEach((project) => projectsStore.put({ id: project.project.id, data: project }));
+  metaStore.put({ key: "activeProjectId", value: nextWorkspace.activeProjectId });
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error("No se pudo migrar la biblioteca."));
+    transaction.onabort = () => reject(transaction.error || new Error("La migración de la biblioteca fue interrumpida."));
+  });
+}
+
+async function writeProjectToIndexedDb(project, activeProjectId) {
+  const transaction = storageDb.transaction([STORAGE_PROJECT_STORE, STORAGE_META_STORE], "readwrite");
+  const normalized = normalizeProject(project);
+  transaction.objectStore(STORAGE_PROJECT_STORE).put({ id: normalized.project.id, data: normalized });
+  transaction.objectStore(STORAGE_META_STORE).put({ key: "activeProjectId", value: activeProjectId });
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error("No se pudo guardar el proyecto."));
+    transaction.onabort = () => reject(transaction.error || new Error("El guardado fue interrumpido."));
+  });
+}
+
+function writeLegacyWorkspace() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
+}
+
+function updateStorageStatusUi() {
+  const status = $("#storage-status");
+  if (!status) return;
+  let message = "Preparando guardado local…";
+  let className = "storage-status pending";
+  if (storageState === "saving") { message = "Guardando cambios…"; className = "storage-status saving"; }
+  if (storageState === "saved") { message = "Guardado local"; className = "storage-status saved"; }
+  if (storageMode === "localstorage" && storageState !== "error") { message = "Guardado local de compatibilidad"; className = "storage-status warning"; }
+  if (storageState === "error") { message = "⚠ No se pudo guardar · exportá una copia"; className = "storage-status error"; }
+  status.textContent = message;
+  status.className = className;
+  status.title = storageError || (storageMode === "indexeddb" ? "Tus proyectos se guardan por separado en el almacenamiento local del navegador." : "El navegador está usando el almacenamiento local de compatibilidad.");
+}
+
+function adoptWorkspace(nextWorkspace) {
+  workspace = withPublicDemos({ activeProjectId: nextWorkspace.activeProjectId, projects: nextWorkspace.projects.map(normalizeProject) });
+  state = workspace.projects.find((item) => item.project.id === workspace.activeProjectId) || workspace.projects[0] || cloneStarter();
+  workspace.activeProjectId = state.project.id;
+  selectedChapterId = state.chapters[0]?.id || null;
+}
+
+async function initializeStorage() {
+  try {
+    storageDb = await openStorageDatabase();
+    const storedWorkspace = await readIndexedDbWorkspace(storageDb);
+    if (storedWorkspace.projects.length) {
+      adoptWorkspace(storedWorkspace);
+    } else {
+      await writeAllProjectsToIndexedDb(workspace);
+    }
+    storageMode = "indexeddb";
+    storageState = "saved";
+    storageError = "";
+    lastSavedAt = new Date();
+    render();
+  } catch (error) {
+    storageMode = "localstorage";
+    storageState = "saved";
+    storageError = error?.message || "No se pudo preparar el guardado avanzado.";
+    updateStorageStatusUi();
+    console.warn("IndexedDB no está disponible; se usará compatibilidad local", error);
+  }
+}
+
+function persist({ deleteProjectId = "" } = {}) {
   state.project.updatedAt = new Date().toISOString();
   workspace.activeProjectId = state.project.id;
   workspace.projects = workspace.projects.map((project) => project.project.id === state.project.id ? state : project);
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace)); } catch (error) { console.warn("No se pudo guardar la biblioteca local", error); }
+  const projectSnapshot = normalizeProject(JSON.parse(JSON.stringify(state)));
+  const activeProjectId = workspace.activeProjectId;
+  storageState = "saving";
+  storageError = "";
+  updateStorageStatusUi();
+  const write = saveQueue.then(async () => {
+    await storageReady;
+    if (storageMode === "indexeddb" && storageDb) {
+      if (deleteProjectId) {
+        const transaction = storageDb.transaction(STORAGE_PROJECT_STORE, "readwrite");
+        transaction.objectStore(STORAGE_PROJECT_STORE).delete(deleteProjectId);
+        await new Promise((resolve, reject) => {
+          transaction.oncomplete = resolve;
+          transaction.onerror = () => reject(transaction.error || new Error("No se pudo retirar el proyecto."));
+          transaction.onabort = () => reject(transaction.error || new Error("La eliminación fue interrumpida."));
+        });
+      }
+      await writeProjectToIndexedDb(projectSnapshot, activeProjectId);
+    } else writeLegacyWorkspace();
+  });
+  saveQueue = write.catch(() => undefined);
+  return write.then(() => {
+    storageState = "saved";
+    storageError = "";
+    lastSavedAt = new Date();
+    updateStorageStatusUi();
+    return { ok: true };
+  }).catch((error) => {
+    storageState = "error";
+    storageError = error?.message || "No se pudo guardar la biblioteca.";
+    updateStorageStatusUi();
+    console.warn("No se pudo guardar la biblioteca local", error);
+    return { ok: false, error };
+  });
+}
+
+function persistAndNotify(successMessage, failureMessage = "No se pudo guardar. Exportá una copia.") {
+  return persist().then((result) => {
+    showToast(result.ok ? successMessage : failureMessage);
+    return result;
+  });
+}
+
+function renameProject() {
+  const nextTitle = window.prompt("Nuevo nombre del proyecto", state.project.title);
+  if (nextTitle === null) return;
+  const title = nextTitle.trim();
+  if (!title) { showToast("El nombre no puede quedar vacío"); return; }
+  state.project.title = title;
+  render();
+  persistAndNotify("Proyecto renombrado");
+}
+
+function archiveProject() {
+  const nextArchived = !state.project.archived;
+  const action = nextArchived ? "archivar" : "recuperar";
+  if (!window.confirm(`¿Querés ${action} “${state.project.title}”?`)) return;
+  state.project.archived = nextArchived;
+  render();
+  persistAndNotify(nextArchived ? "Proyecto archivado" : "Proyecto recuperado");
+}
+
+function deleteProject() {
+  if (workspace.projects.length <= 1) { showToast("No podés eliminar el único proyecto de la biblioteca"); return; }
+  if (!window.confirm(`Esto elimina “${state.project.title}” de esta biblioteca. Si no tenés una copia JSON, no vas a poder recuperarlo. ¿Continuar?`)) return;
+  const deletedProjectId = state.project.id;
+  const nextProject = workspace.projects.find((project) => project.project.id !== deletedProjectId);
+  workspace.projects = workspace.projects.filter((project) => project.project.id !== deletedProjectId);
+  state = nextProject || cloneStarter();
+  workspace.activeProjectId = state.project.id;
+  selectedChapterId = state.chapters[0]?.id || null;
+  sourceFilter = "";
+  evidenceFilter = "";
+  activeView = "overview";
+  render();
+  persist({ deleteProjectId: deletedProjectId }).then((result) => showToast(result.ok ? "Proyecto eliminado" : "No se pudo completar la eliminación; exportá una copia"));
+}
+
+function deleteSource(sourceId) {
+  const source = sourceById(sourceId);
+  if (!source || !window.confirm(`¿Eliminar la fuente “${source.title}”? Las evidencias y capítulos vinculados quedarán sin esa fuente, pero no se borrará su texto del manuscrito.`)) return;
+  state.sources = state.sources.filter((item) => item.id !== sourceId);
+  state.evidence = state.evidence.map((item) => item.sourceId === sourceId ? { ...item, sourceId: "" } : item);
+  state.chapters = state.chapters.map((chapter) => ({ ...chapter, sources: chapter.sources.filter((id) => id !== sourceId) }));
+  persistAndNotify("Fuente eliminada");
+  render();
+}
+
+function deleteEvidence(evidenceId) {
+  const item = state.evidence.find((evidence) => evidence.id === evidenceId);
+  if (!item || !window.confirm("¿Eliminar esta evidencia? Esta acción no se puede deshacer salvo que tengas una copia JSON.")) return;
+  state.evidence = state.evidence.filter((evidence) => evidence.id !== evidenceId);
+  persistAndNotify("Evidencia eliminada");
+  render();
 }
 
 function escapeHtml(value = "") {
@@ -397,10 +607,21 @@ function totalWords() {
 
 function chapterById(id) { return state.chapters.find((chapter) => chapter.id === id); }
 function sourceById(id) { return state.sources.find((source) => source.id === id); }
+function evidenceById(id) { return state.evidence.find((evidence) => evidence.id === id); }
 
 function sourceLocationMarkup(location) {
   if (/^https?:\/\//i.test(location)) return `<a class="source-location-link" href="${escapeHtml(location)}" target="_blank" rel="noreferrer">↗ Abrir referencia web</a>`;
   return `<div class="muted" style="margin-top:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(location)}">⌁ ${escapeHtml(location)}</div>`;
+}
+
+function sourceCitation(source) {
+  const parts = [source.author, source.year, source.title, source.edition, source.publisher].filter((part) => String(part || "").trim());
+  return parts.length ? parts.join(". ") : "Referencia bibliográfica todavía incompleta.";
+}
+
+function sourceReferenceMarkdown(source) {
+  const details = [sourceCitation(source), source.pages && source.pages !== "Sin paginar" ? `páginas: ${source.pages}` : "", source.location ? `ubicación: ${source.location}` : "", source.url ? `URL: ${source.url}` : "", source.accessedAt ? `consulta: ${source.accessedAt}` : ""].filter(Boolean);
+  return `- ${details.join(" · ")}`;
 }
 
 function formatDate(iso) {
@@ -411,20 +632,22 @@ function formatDate(iso) {
 function statusClass(status) { return String(status).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "pendiente"; }
 
 function render() {
-  const viewTitles = { overview: "Panorama", sources: "Fuentes", evidence: "Evidencias", structure: "Arquitectura", manuscript: "Manuscrito", audit: "Auditor editorial", study: "Modo estudio" };
+  const viewTitles = { overview: "Panorama", sources: "Fuentes", evidence: "Evidencias", traceability: "Trazabilidad", structure: "Arquitectura", manuscript: "Manuscrito", audit: "Auditor editorial", study: "Modo estudio" };
   $("#page-title").textContent = viewTitles[activeView];
   $("#page-kicker").textContent = activeView === "overview" ? "Taller editorial" : state.project.title;
   const selector = $("#project-selector");
   if (selector) {
-    selector.innerHTML = workspace.projects.map((project) => `<option value="${escapeHtml(project.project.id)}">${escapeHtml(project.project.title)}</option>`).join("");
+    selector.innerHTML = workspace.projects.map((project) => `<option value="${escapeHtml(project.project.id)}">${escapeHtml(project.project.title)}${project.project.archived ? " · archivado" : ""}</option>`).join("");
     selector.value = state.project.id;
   }
-  $("#sidebar-project-kind").textContent = `${state.project.subtitle} · ${workspace.projects.length} ${workspace.projects.length === 1 ? "proyecto" : "proyectos"}`;
+  $("#sidebar-project-kind").textContent = `${state.project.subtitle}${state.project.archived ? " · Archivado" : ""} · ${workspace.projects.length} ${workspace.projects.length === 1 ? "proyecto" : "proyectos"}`;
   $("#nav-source-count").textContent = state.sources.length;
   $("#nav-evidence-count").textContent = state.evidence.length;
+  $("#nav-traceability-count").textContent = state.evidence.length;
   $("#nav-chapter-count").textContent = state.chapters.length;
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === activeView));
   $("#app-content").innerHTML = views[activeView]();
+  updateStorageStatusUi();
   if (activeView === "manuscript") syncEditorStatus();
 }
 
@@ -514,6 +737,20 @@ const views = {
     `;
   },
 
+  traceability() {
+    const linkedEvidence = state.evidence.filter((item) => item.sourceId && sourceById(item.sourceId));
+    const map = state.evidence.map((item) => {
+      const source = sourceById(item.sourceId);
+      const chapters = source ? state.chapters.filter((chapter) => chapter.sources.includes(source.id)) : [];
+      return { item, source, chapters };
+    });
+    return `
+      <section class="view-intro"><div><div class="eyebrow">Afirmación → evidencia → fuente</div><h2>Mapa de trazabilidad</h2><p>Una vista derivada del proyecto para seguir qué afirmaciones tienen respaldo, de dónde viene ese respaldo y en qué capítulos aparece conectada la fuente.</p></div><div class="meta-chip">${linkedEvidence.length} de ${state.evidence.length} con fuente</div></section>
+      <div class="traceability-note panel panel-pad"><strong>Cómo leerlo:</strong> el vínculo con los capítulos se infiere a partir de la fuente conectada al capítulo. No significa que la fuente sostenga automáticamente todo lo que allí se escribe; esa comprobación sigue siendo editorial.</div>
+      <div class="traceability-list">${map.length ? map.map(({ item, source, chapters }) => `<article class="traceability-card ${source ? "" : "traceability-unlinked"}"><div class="traceability-card-head"><span class="evidence-type ${evidenceTypeClass(item.type)}">${escapeHtml(item.type)}</span><span class="status-pill ${item.status === "Adoptado" ? "revisado" : item.status === "Descartado" ? "pendiente" : "en-proceso"}">${escapeHtml(item.status)}</span></div><h3>${escapeHtml(item.statement || "Afirmación sin texto")}</h3><div class="traceability-flow"><div><div class="trace-label">Evidencia</div><p>${escapeHtml(item.supportingText || "Sin fragmento o referencia conservada")}</p><span class="muted">${escapeHtml(item.location || "Sin ubicación")}</span></div><div class="trace-arrow" aria-hidden="true">→</div><div><div class="trace-label">Fuente</div><p>${source ? escapeHtml(source.title) : "Sin fuente vinculada"}</p><span class="muted">${source ? escapeHtml(sourceCitation(source)) : "Completá el vínculo desde Evidencias"}</span></div><div class="trace-arrow" aria-hidden="true">→</div><div><div class="trace-label">Capítulos conectados</div>${chapters.length ? `<ul>${chapters.map((chapter) => `<li>${escapeHtml(chapter.title)}</li>`).join("")}</ul>` : `<p class="muted">Ninguno todavía</p>`}</div></div><div class="traceability-actions"><button class="text-button" data-action="view-evidence" data-evidence-id="${escapeHtml(item.id)}">Ver evidencia</button>${source ? `<button class="text-button" data-action="view-source" data-source-id="${escapeHtml(source.id)}">Ver fuente</button>` : ""}</div></article>`).join("") : `<div class="empty-state">Todavía no hay afirmaciones para mapear. Registrá una evidencia y vinculala a una fuente.</div>`}</div>
+    `;
+  },
+
   structure() {
     return `
       <section class="view-intro"><div><div class="eyebrow">Diseño del libro</div><h2>Arquitectura antes de rellenar</h2><p>Definí qué tiene que lograr cada capítulo y qué fuentes lo sostienen. El texto puede crecer después; el propósito debe estar claro primero.</p></div><div class="meta-chip">${state.chapters.length} capítulos · ${state.chapters.filter((c) => c.status === "Pendiente").length} pendientes</div></section>
@@ -531,7 +768,7 @@ const views = {
       <section class="view-intro"><div><div class="eyebrow">Escritura acompañada</div><h2>Manuscrito</h2><p>Escribí con el propósito del capítulo y sus fuentes a la vista. Cronista guarda cada cambio en este navegador.</p></div><button class="button secondary" data-action="save-manuscript">Guardar ahora</button></section>
       <div class="manuscript-layout">
         <div class="panel editor-panel">
-          <div class="editor-toolbar"><select id="chapter-selector" aria-label="Elegir capítulo">${state.chapters.map((item) => `<option value="${item.id}" ${item.id === chapter.id ? "selected" : ""}>${escapeHtml(item.title)}</option>`).join("")}</select><span id="editor-status" class="editor-status">Guardado local</span></div>
+          <div class="editor-toolbar"><select id="chapter-selector" aria-label="Elegir capítulo">${state.chapters.map((item) => `<option value="${item.id}" ${item.id === chapter.id ? "selected" : ""}>${escapeHtml(item.title)}</option>`).join("")}</select><span id="editor-status" class="editor-status">${storageState === "starting" ? "Preparando guardado…" : storageState === "error" ? "⚠ No se pudo guardar" : "Guardado local"}</span></div>
           <textarea id="manuscript-editor" spellcheck="true" placeholder="Empezá a escribir el capítulo...">${escapeHtml(chapter.draft)}</textarea>
           <div class="editor-footer"><span id="editor-word-count">${wordCount(chapter.draft).toLocaleString("es-UY")} palabras</span><span>Meta del proyecto: ${state.project.targetWords.toLocaleString("es-UY")}</span></div>
         </div>
@@ -566,7 +803,9 @@ const views = {
 function sourceCard(source) {
   const words = sourceWordCount(source);
   const fullText = source.content || "";
-  return `<article class="source-card" data-source-id="${escapeHtml(source.id)}"><div class="source-card-top"><div><div class="source-kind">${escapeHtml(source.kind)}</div><h3>${escapeHtml(source.title)}</h3><div class="source-author">${escapeHtml(source.author || "Procedencia no indicada")}</div></div><div class="source-badge">${source.imported ? "Importada" : "Conectada"}</div></div><div class="source-meta"><span class="meta-chip">${escapeHtml(source.pages || "Sin paginar")}</span>${words ? `<span class="meta-chip">${words.toLocaleString("es-UY")} palabras conservadas</span>` : ""}</div><p class="source-note">${escapeHtml(source.note || "Sin nota de trabajo todavía.")}</p>${source.location ? sourceLocationMarkup(source.location) : ""}${source.excerpt ? `<div class="source-preview">${escapeHtml(source.excerpt)}</div>` : ""}${fullText ? `<details class="source-full-text"><summary>Leer contenido completo</summary><pre>${escapeHtml(fullText)}</pre><div class="source-reader-hint">Seleccioná un pasaje y después elegí “Crear evidencia desde este texto”.</div></details>` : `<div class="source-empty-content">Contenido completo no incorporado</div>`}<div class="source-card-actions"><button class="text-button" data-action="compose-evidence" data-source-id="${escapeHtml(source.id)}">${fullText ? "Crear evidencia desde este texto" : "Crear evidencia vinculada"}</button></div></article>`;
+  const citation = sourceCitation(source);
+  const archivedLabel = source.archived ? `<span class="status-pill pendiente">Archivada</span>` : "";
+  return `<article class="source-card ${source.archived ? "is-archived" : ""}" data-source-id="${escapeHtml(source.id)}"><div class="source-card-top"><div><div class="source-kind">${escapeHtml(source.kind)}</div><h3>${escapeHtml(source.title)}</h3><div class="source-author">${escapeHtml(source.author || "Procedencia no indicada")}</div></div><div class="source-badge">${source.imported ? "Importada" : "Conectada"}</div></div><div class="source-meta"><span class="meta-chip">${escapeHtml(source.pages || "Sin paginar")}</span>${words ? `<span class="meta-chip">${words.toLocaleString("es-UY")} palabras conservadas</span>` : ""}${archivedLabel}</div><p class="source-citation">${escapeHtml(citation)}${source.accessedAt ? ` · Consultada el ${escapeHtml(source.accessedAt)}` : ""}</p><p class="source-note">${escapeHtml(source.note || "Sin nota de trabajo todavía.")}</p>${source.location ? sourceLocationMarkup(source.location) : ""}${source.url ? sourceLocationMarkup(source.url) : ""}${source.excerpt ? `<div class="source-preview">${escapeHtml(source.excerpt)}</div>` : ""}${fullText ? `<details class="source-full-text"><summary>Leer contenido completo</summary><pre>${escapeHtml(fullText)}</pre><div class="source-reader-hint">Seleccioná un pasaje y después elegí “Crear evidencia desde este texto”.</div></details>` : `<div class="source-empty-content">Contenido completo no incorporado</div>`}<div class="source-card-actions"><button class="text-button" data-action="compose-evidence" data-source-id="${escapeHtml(source.id)}">${fullText ? "Crear evidencia desde este texto" : "Crear evidencia vinculada"}</button><button class="text-button" data-action="edit-source" data-source-id="${escapeHtml(source.id)}">Editar</button><button class="text-button danger-text" data-action="delete-source" data-source-id="${escapeHtml(source.id)}">Eliminar</button></div></article>`;
 }
 
 function chapterEditor(chapter, index) {
@@ -580,7 +819,7 @@ function chapterEditor(chapter, index) {
 function filteredSources() {
   const query = sourceFilter.trim().toLowerCase();
   if (!query) return state.sources;
-  return state.sources.filter((source) => [source.title, source.kind, source.author, source.location, source.note, source.excerpt, source.content].join(" ").toLowerCase().includes(query));
+  return state.sources.filter((source) => [source.title, source.kind, source.author, source.location, source.url, source.edition, source.publisher, source.year, source.note, source.excerpt, source.content].join(" ").toLowerCase().includes(query));
 }
 
 function sourceGridMarkup() {
@@ -613,7 +852,7 @@ function evidenceCard(item) {
   const support = item.supportingText || "";
   const sourceOptions = `<option value="">Sin fuente todavía</option>${state.sources.map((sourceItem) => `<option value="${escapeHtml(sourceItem.id)}" ${sourceItem.id === item.sourceId ? "selected" : ""}>${escapeHtml(sourceItem.title)}</option>`).join("")}`;
   const evidenceId = escapeHtml(item.id);
-  return `<article class="evidence-card"><div class="evidence-card-head"><span class="evidence-type ${evidenceTypeClass(item.type)}">${escapeHtml(item.type)}</span><span class="status-pill ${item.status === "Adoptado" ? "revisado" : item.status === "Descartado" ? "pendiente" : "en-proceso"}">${escapeHtml(item.status)}</span></div><label>Afirmación<textarea data-evidence-field="statement" data-evidence-id="${evidenceId}" rows="3">${escapeHtml(item.statement)}</textarea></label><label>Fragmento o referencia de respaldo<textarea data-evidence-field="supportingText" data-evidence-id="${evidenceId}" rows="3" placeholder="Pasaje textual, paráfrasis o referencia precisa">${escapeHtml(support)}</textarea></label>${support.trim() ? `<blockquote class="evidence-support">${escapeHtml(support)}</blockquote>` : `<div class="evidence-support-empty">Sin fragmento de respaldo todavía</div>`}<div class="evidence-meta-grid"><label>Clasificación<select data-evidence-field="type" data-evidence-id="${evidenceId}"><option ${item.type === "Hecho" ? "selected" : ""}>Hecho</option><option ${item.type === "Inferencia" ? "selected" : ""}>Inferencia</option><option ${item.type === "Hipótesis" ? "selected" : ""}>Hipótesis</option><option ${item.type === "Criterio editorial" ? "selected" : ""}>Criterio editorial</option></select></label><label>Fuente<select data-evidence-field="sourceId" data-evidence-id="${evidenceId}">${sourceOptions}</select></label><label>Ubicación<input data-evidence-field="location" data-evidence-id="${evidenceId}" value="${escapeHtml(item.location)}" placeholder="p. 42"></label><label>Estado<select data-evidence-field="status" data-evidence-id="${evidenceId}"><option ${item.status === "Por revisar" ? "selected" : ""}>Por revisar</option><option ${item.status === "En discusión" ? "selected" : ""}>En discusión</option><option ${item.status === "Adoptado" ? "selected" : ""}>Adoptado</option><option ${item.status === "Descartado" ? "selected" : ""}>Descartado</option></select></label></div><label>Nota de trabajo<textarea data-evidence-field="note" data-evidence-id="${evidenceId}" rows="2" placeholder="Qué falta confirmar o por qué importa">${escapeHtml(item.note)}</textarea></label><div class="evidence-card-footer">${source ? `Vinculada a <span>${escapeHtml(source.title)}</span> <button class="text-button evidence-source-button" data-action="view-source" data-source-id="${escapeHtml(source.id)}">Ver fuente</button>` : "Sin fuente vinculada todavía"}</div></article>`;
+  return `<article class="evidence-card ${item.archived ? "is-archived" : ""}"><div class="evidence-card-head"><span class="evidence-type ${evidenceTypeClass(item.type)}">${escapeHtml(item.type)}</span><span class="status-pill ${item.status === "Adoptado" ? "revisado" : item.status === "Descartado" ? "pendiente" : "en-proceso"}">${escapeHtml(item.status)}${item.archived ? " · Archivada" : ""}</span></div><label>Afirmación<textarea data-evidence-field="statement" data-evidence-id="${evidenceId}" rows="3">${escapeHtml(item.statement)}</textarea></label><label>Fragmento o referencia de respaldo<textarea data-evidence-field="supportingText" data-evidence-id="${evidenceId}" rows="3" placeholder="Pasaje textual, paráfrasis o referencia precisa">${escapeHtml(support)}</textarea></label>${support.trim() ? `<blockquote class="evidence-support">${escapeHtml(support)}</blockquote>` : `<div class="evidence-support-empty">Sin fragmento de respaldo todavía</div>`}<div class="evidence-meta-grid"><label>Clasificación<select data-evidence-field="type" data-evidence-id="${evidenceId}"><option ${item.type === "Hecho" ? "selected" : ""}>Hecho</option><option ${item.type === "Inferencia" ? "selected" : ""}>Inferencia</option><option ${item.type === "Hipótesis" ? "selected" : ""}>Hipótesis</option><option ${item.type === "Criterio editorial" ? "selected" : ""}>Criterio editorial</option></select></label><label>Fuente<select data-evidence-field="sourceId" data-evidence-id="${evidenceId}">${sourceOptions}</select></label><label>Ubicación<input data-evidence-field="location" data-evidence-id="${evidenceId}" value="${escapeHtml(item.location)}" placeholder="p. 42"></label><label>Estado<select data-evidence-field="status" data-evidence-id="${evidenceId}"><option ${item.status === "Por revisar" ? "selected" : ""}>Por revisar</option><option ${item.status === "En discusión" ? "selected" : ""}>En discusión</option><option ${item.status === "Adoptado" ? "selected" : ""}>Adoptado</option><option ${item.status === "Descartado" ? "selected" : ""}>Descartado</option></select></label></div><label>Nota de trabajo<textarea data-evidence-field="note" data-evidence-id="${evidenceId}" rows="2" placeholder="Qué falta confirmar o por qué importa">${escapeHtml(item.note)}</textarea></label><div class="evidence-card-footer">${source ? `Vinculada a <span>${escapeHtml(source.title)}</span> <button class="text-button evidence-source-button" data-action="view-source" data-source-id="${escapeHtml(source.id)}">Ver fuente</button>` : "Sin fuente vinculada todavía"}<button class="text-button danger-text" data-action="delete-evidence" data-evidence-id="${evidenceId}">Eliminar</button></div></article>`;
 }
 
 function auditChecks() {
@@ -621,11 +860,13 @@ function auditChecks() {
   const allPurposes = hasChapters && state.chapters.every((chapter) => chapter.purpose.trim());
   const allSources = hasChapters && state.chapters.every((chapter) => chapter.sources.length > 0);
   const hasDraft = state.chapters.some((chapter) => wordCount(chapter.draft) > 0);
-  const hasDoubts = state.sources.some((source) => /dudas|control/i.test(source.title));
+  const hasDoubts = state.evidence.some((item) => item.type === "Hipótesis" || item.status === "Por revisar" || item.status === "En discusión");
   const hasProgress = state.chapters.some((chapter) => wordCount(chapter.draft) >= 180);
   const hasEvidence = state.evidence.length > 0;
   const supportedEvidenceCount = state.evidence.filter((item) => (item.supportingText || "").trim()).length;
   const hasSupport = supportedEvidenceCount > 0;
+  const unlinkedEvidenceCount = state.evidence.filter((item) => !item.sourceId || !sourceById(item.sourceId)).length;
+  const unusedSourceCount = state.sources.filter((source) => !state.chapters.some((chapter) => chapter.sources.includes(source.id)) && !state.evidence.some((item) => item.sourceId === source.id)).length;
   const uniqueSourceLinks = new Set(state.chapters.flatMap((chapter) => chapter.sources)).size;
   return [
     { ok: allPurposes, title: "Cada capítulo tiene un propósito", detail: allPurposes ? "La arquitectura explica qué debe conseguir cada tramo." : "Hay capítulos sin una intención explícita." },
@@ -635,6 +876,8 @@ function auditChecks() {
     { ok: hasDoubts, title: "Las dudas editoriales están visibles", detail: hasDoubts ? "Las ambigüedades permanecen registradas y no se presentan como certezas." : "Añadí un registro de dudas para separar control y conjetura." },
     { ok: hasEvidence, title: "Las afirmaciones importantes están registradas", detail: hasEvidence ? `${state.evidence.length} piezas distinguen hechos, inferencias y decisiones de trabajo.` : "Registrá al menos una afirmación para empezar a construir trazabilidad." },
     { ok: hasSupport, title: "Hay respaldos textuales conservados", detail: hasSupport ? `${supportedEvidenceCount} evidencias conservan un fragmento o referencia para volver a la fuente.` : "Completá el fragmento de respaldo en las evidencias que quieras cerrar." },
+    { ok: hasEvidence && unlinkedEvidenceCount === 0, title: "Las evidencias tienen fuente identificada", detail: unlinkedEvidenceCount ? `${unlinkedEvidenceCount} evidencia(s) todavía no tienen una fuente válida vinculada.` : "Cada evidencia registrada apunta a una fuente del proyecto." },
+    { ok: state.sources.length === 0 || unusedSourceCount === 0, title: "No hay fuentes aisladas", detail: unusedSourceCount ? `${unusedSourceCount} fuente(s) todavía no están conectadas a capítulos ni evidencias.` : "Las fuentes tienen al menos un vínculo de trabajo." },
     { ok: false, title: "Revisión de hechos e inferencias", detail: "Este control requiere lectura humana: Cronista puede señalar zonas, pero no debe decidir por vos qué es histórico." }
   ];
 }
@@ -657,12 +900,12 @@ function buildQuestions() {
   ];
 }
 
-function syncEditorStatus(message = "Guardado local") {
+function syncEditorStatus(message = "") {
   const editor = $("#manuscript-editor");
   const status = $("#editor-status");
   const count = $("#editor-word-count");
   if (editor && count) count.textContent = `${wordCount(editor.value).toLocaleString("es-UY")} palabras`;
-  if (status) status.textContent = message;
+  if (status) status.textContent = message || (storageState === "starting" ? "Preparando guardado…" : storageState === "saving" ? "Guardando…" : storageState === "error" ? "⚠ No se pudo guardar" : "Guardado local");
 }
 
 function showToast(message) {
@@ -673,7 +916,22 @@ function showToast(message) {
   toastTimer = setTimeout(() => toast.classList.remove("show"), 2600);
 }
 
-function openSourceDialog() { $("#source-dialog").showModal(); }
+function openSourceDialog(sourceId = "") {
+  const dialog = $("#source-dialog");
+  const form = $("#source-form");
+  const source = sourceId ? sourceById(sourceId) : null;
+  form.reset();
+  form.elements.sourceId.value = source?.id || "";
+  $("#source-dialog-kicker").textContent = source ? "Editar fuente" : "Nueva fuente";
+  $("#source-dialog-title").textContent = source ? "Revisar material del proyecto" : "Sumar material al proyecto";
+  $("#source-dialog-submit").textContent = source ? "Guardar cambios" : "Guardar fuente";
+  if (source) {
+    ["title", "kind", "author", "location", "url", "edition", "publisher", "year", "accessedAt", "note", "content"].forEach((field) => {
+      if (form.elements[field]) form.elements[field].value = source[field] || "";
+    });
+  }
+  dialog.showModal();
+}
 
 ["source-dialog", "project-dialog"].forEach((dialogId) => {
   const dialog = $(`#${dialogId}`);
@@ -681,7 +939,7 @@ function openSourceDialog() { $("#source-dialog").showModal(); }
 });
 
 function exportProject() {
-  const lines = [`# ${state.project.title}`, "", state.project.description, "", `## Norte`, "", state.project.premise, "", "## Fuentes", "", ...state.sources.map((source) => `- **${source.title}** (${source.kind}) — ${source.author}. ${source.location || ""}`), "", "## Evidencias", "", ...(state.evidence.length ? state.evidence.flatMap((item) => {
+  const lines = [`# ${state.project.title}`, "", state.project.description, "", `## Norte`, "", state.project.premise, "", "## Fuentes y referencias", "", ...state.sources.map((source) => `${sourceReferenceMarkdown(source)}${source.note ? `\n  - Nota: ${source.note}` : ""}`), "", "## Evidencias", "", ...(state.evidence.length ? state.evidence.flatMap((item) => {
     const source = sourceById(item.sourceId);
     return [`- **${item.type}** ${item.statement} — ${source ? source.title : "Sin fuente"} (${item.location || "sin ubicación"}). Estado: ${item.status}.`, item.supportingText ? `  - Respaldo: ${item.supportingText}` : "  - Respaldo: _Sin fragmento conservado._"];
   }) : ["_No hay evidencias registradas._"]), "", "## Arquitectura", "", ...state.chapters.map((chapter, index) => `### ${index + 1}. ${chapter.title}\n\n**Propósito:** ${chapter.purpose}\n\n**Páginas:** ${chapter.pages}\n\n**Estado:** ${chapter.status}\n\n${chapter.draft || "_Sin borrador todavía._"}\n`), "", "## Auditoría", "", `Puntuación mecánica: ${auditScore()}%.`, "La revisión de hechos e inferencias requiere lectura humana.", ""];
@@ -714,11 +972,18 @@ document.addEventListener("click", (event) => {
   if (action === "view") { activeView = actionTarget.dataset.view; render(); return; }
   if (action === "open-project-dialog") { $("#project-dialog").showModal(); return; }
   if (action === "open-source-dialog") { openSourceDialog(); return; }
+  if (action === "rename-project") { renameProject(); return; }
+  if (action === "archive-project") { archiveProject(); return; }
+  if (action === "delete-project") { deleteProject(); return; }
+  if (action === "edit-source") { openSourceDialog(actionTarget.dataset.sourceId); return; }
+  if (action === "delete-source") { deleteSource(actionTarget.dataset.sourceId); return; }
+  if (action === "delete-evidence") { deleteEvidence(actionTarget.dataset.evidenceId); return; }
   if (action === "import-file") { $("#file-input").click(); return; }
   if (action === "import-json") { $("#project-file-input").click(); return; }
   if (action === "export") { exportProject(); return; }
   if (action === "export-json") { exportJson(); return; }
   if (action === "view-source") { activeView = "sources"; sourceFilter = sourceById(actionTarget.dataset.sourceId)?.title || ""; render(); return; }
+  if (action === "view-evidence") { activeView = "evidence"; evidenceFilter = evidenceById(actionTarget.dataset.evidenceId)?.statement || ""; render(); return; }
   if (action === "compose-evidence") {
     const source = sourceById(actionTarget.dataset.sourceId);
     const selection = selectedSourceSelection.sourceId === source?.id ? selectedSourceSelection.text : "";
@@ -731,7 +996,7 @@ document.addEventListener("click", (event) => {
     showToast(selection ? "Fragmento preparado para una evidencia" : "Fuente vinculada para una nueva evidencia");
     return;
   }
-  if (action === "save-manuscript") { persist(); syncEditorStatus("Guardado ahora"); showToast("Manuscrito guardado localmente"); return; }
+  if (action === "save-manuscript") { persist().then((result) => { syncEditorStatus(result.ok ? "Guardado ahora" : "⚠ No se pudo guardar"); showToast(result.ok ? "Manuscrito guardado localmente" : "No se pudo guardar. Exportá una copia."); }); return; }
   if (action === "reset-demo") {
     if (window.confirm("Esto reemplaza los cambios guardados de este proyecto por su versión inicial. ¿Continuar?")) { const replacement = cloneInitialProject(state); state = replacement; sourceFilter = ""; selectedChapterId = state.chapters[0]?.id || null; persist(); render(); showToast("Proyecto de prueba restaurado"); }
     return;
@@ -777,7 +1042,11 @@ document.addEventListener("input", (event) => {
     chapter.draft = target.value;
     syncEditorStatus("Guardando…");
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { persist(); syncEditorStatus("Guardado local"); }, 450);
+    saveTimer = setTimeout(async () => {
+      const result = await persist();
+      syncEditorStatus(result.ok ? "Guardado local" : "⚠ No se pudo guardar — exportá una copia");
+      if (!result.ok) showToast("No se pudo guardar. Exportá una copia.");
+    }, 450);
   }
 });
 
@@ -818,13 +1087,19 @@ $("#source-form").addEventListener("submit", (event) => {
   const title = String(form.get("title") || "").trim();
   if (!title) { showToast("Poné un nombre para la fuente"); return; }
   const content = String(form.get("content") || "").trim();
-  const source = { id: newId("source"), title, kind: String(form.get("kind") || "Fuente").trim(), author: String(form.get("author") || "Procedencia no indicada").trim(), location: String(form.get("location") || "").trim(), pages: "Sin paginar", note: String(form.get("note") || "").trim(), excerpt: content.replace(/\s+/g, " ").slice(0, 430), content, wordCount: wordCount(content), imported: true };
-  state.sources.push(source);
-  persist();
+  const sourceId = String(form.get("sourceId") || "").trim();
+  const existingSource = sourceId ? sourceById(sourceId) : null;
+  const sourceData = { title, kind: String(form.get("kind") || "Fuente").trim(), author: String(form.get("author") || "Procedencia no indicada").trim(), location: String(form.get("location") || "").trim(), url: String(form.get("url") || "").trim(), edition: String(form.get("edition") || "").trim(), publisher: String(form.get("publisher") || "").trim(), year: String(form.get("year") || "").trim(), accessedAt: String(form.get("accessedAt") || "").trim(), pages: existingSource?.pages || "Sin paginar", note: String(form.get("note") || "").trim(), excerpt: content.replace(/\s+/g, " ").slice(0, 430), content, wordCount: wordCount(content), imported: existingSource ? Boolean(existingSource.imported) : true, archived: existingSource ? Boolean(existingSource.archived) : false };
+  if (sourceId) {
+    const index = state.sources.findIndex((source) => source.id === sourceId);
+    if (index >= 0) state.sources[index] = { ...state.sources[index], ...sourceData };
+  } else {
+    state.sources.push({ id: newId("source"), ...sourceData });
+  }
   event.currentTarget.reset();
   $("#source-dialog").close();
   render();
-  showToast("Fuente agregada al proyecto");
+  persistAndNotify(sourceId ? "Fuente actualizada" : "Fuente agregada al proyecto");
 });
 
 $("#project-form").addEventListener("submit", (event) => {
@@ -927,3 +1202,4 @@ document.addEventListener("submit", (event) => {
 });
 
 render();
+storageReady = initializeStorage();

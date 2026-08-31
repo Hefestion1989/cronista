@@ -16,6 +16,8 @@ Al crear un proyecto, completá:
 - **Norte del proyecto:** la pregunta, tensión o propósito que va a orientar las decisiones.
 - **Meta de palabras:** una referencia de desarrollo, no una obligación.
 
+Desde la tarjeta del proyecto también podés **renombrarlo**, **archivarlo**, recuperarlo o eliminarlo. Antes de eliminar algo importante, exportá una copia JSON: la eliminación no tiene papelera.
+
 ### 2. Reuní las fuentes
 
 En **Fuentes** podés:
@@ -26,7 +28,9 @@ En **Fuentes** podés:
 - abrir el texto completo de una fuente importada;
 - preparar una evidencia a partir de un fragmento seleccionado.
 
-Para cada fuente conviene dejar claro de dónde viene, qué contiene y para qué puede servir. Un PDF se conserva como referencia local; si necesitás trabajar con su texto completo, agregá también una transcripción TXT o Markdown revisada.
+Desde cada tarjeta podés editar o eliminar una fuente. La ficha conserva, cuando los completás, datos bibliográficos básicos: edición, editorial o institución, año y fecha de consulta.
+
+Para cada fuente conviene dejar claro de dónde viene, qué contiene y para qué puede servir. Un PDF se conserva como referencia local sin extracción automática de texto; si necesitás trabajar con su contenido, agregá también una transcripción TXT o Markdown revisada.
 
 ### 3. Separá los niveles de conocimiento
 
@@ -38,6 +42,8 @@ En **Evidencias**, registrá cada afirmación importante y elegí una clasificac
 - **Criterio editorial:** una decisión sobre cómo vas a tratar el texto.
 
 Siempre que puedas, asociá la afirmación con una fuente, una ubicación y un fragmento o referencia de respaldo. La etiqueta no vuelve verdadera una afirmación: solo hace visible qué tipo de afirmación es.
+
+Si una evidencia deja de servir, podés eliminarla desde su tarjeta. Si eliminás una fuente, las evidencias vinculadas no desaparecen: quedan sin fuente para que puedas reconstruir el vínculo o decidir qué hacer con ellas.
 
 ### 4. Armá la arquitectura
 
@@ -69,11 +75,15 @@ En **Auditor editorial**, Cronista revisa controles mecánicos:
 
 Las advertencias indican dónde mirar. Cronista no verifica por sí solo hechos históricos, calidad literaria, citas ni interpretaciones.
 
-### 7. Usá el modo estudio
+### 7. Seguí la trazabilidad
+
+En **Trazabilidad**, cada afirmación se muestra junto con su respaldo, la fuente asociada y los capítulos que usan esa fuente. Es un mapa de relaciones de trabajo, no una prueba automática de que la fuente sostenga todo el capítulo. Si una afirmación aparece sin fuente o sin ubicación, volvé a **Evidencias** y completala.
+
+### 8. Usá el modo estudio
 
 **Modo estudio** genera preguntas a partir de la arquitectura y las notas del proyecto. Sirve para comprobar si entendés el argumento, detectar tensiones y reconocer qué todavía no está demostrado.
 
-### 8. Exportá una copia
+### 9. Exportá una copia
 
 - **Markdown:** una versión legible para revisar o compartir.
 - **Copia JSON:** una copia completa para respaldar o importar el proyecto en otro navegador.
@@ -86,7 +96,9 @@ Para un primer proyecto, cargá tres fuentes, registrá cinco afirmaciones y arm
 
 ## Privacidad y límites
 
-Cronista funciona localmente y guarda los proyectos en el `localStorage` del navegador. No necesita una cuenta ni sube automáticamente tus textos. Eso no es cifrado: cualquier proceso o usuario con acceso a esa sesión de Windows podría llegar a esos datos.
+Cronista funciona localmente y guarda los proyectos en IndexedDB, un almacenamiento del navegador preparado para datos locales más grandes. Las bibliotecas antiguas guardadas en `localStorage` se migran al abrir la aplicación; ese almacenamiento queda como compatibilidad y no se usa como destino principal. No necesitás una cuenta y Cronista no sube automáticamente tus textos.
+
+El indicador de la barra lateral muestra si el guardado está preparado, en curso o terminado. Si aparece una advertencia, exportá una copia JSON antes de seguir trabajando. El almacenamiento local no es cifrado: cualquier proceso o usuario con acceso a esa sesión de Windows podría llegar a esos datos.
 
 Antes de compartir o publicar el repositorio, revisá que no haya exportaciones, archivos importados, rutas personales ni material privado. La aplicación pública incluye ejemplos y documentación, no una biblioteca personal.
 
