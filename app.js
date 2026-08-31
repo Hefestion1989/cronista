@@ -15,6 +15,7 @@ let saveVersion = 0;
 let lastSavedVersion = 0;
 let storageReady = Promise.resolve();
 let saveQueue = Promise.resolve();
+let pdfJsPromise = null;
 
 const starterProject = {
   project: {
@@ -280,7 +281,7 @@ let activeView = "overview";
 let sourceFilter = "";
 let evidenceFilter = "";
 let evidenceDraft = { sourceId: "", supportingText: "", location: "" };
-let selectedSourceSelection = { sourceId: "", text: "" };
+let selectedSourceSelection = { sourceId: "", text: "", location: "" };
 let selectedChapterId = state.chapters[0]?.id || null;
 let saveTimer = null;
 let toastTimer = null;
@@ -348,7 +349,13 @@ function normalizeProject(project) {
     const item = source && typeof source === "object" ? source : {};
     const content = String(item.content || "");
     const storedWordCount = Number(item.wordCount);
-    return { ...item, id: String(item.id || newId(`source-${index + 1}`)).trim(), title: String(item.title || "Fuente sin título").trim(), kind: String(item.kind || "Fuente").trim(), author: String(item.author || "Procedencia no indicada").trim(), location: String(item.location || "").trim(), url: String(item.url || "").trim(), edition: String(item.edition || "").trim(), publisher: String(item.publisher || "").trim(), year: String(item.year || "").trim(), accessedAt: String(item.accessedAt || "").trim(), pages: String(item.pages || "Sin paginar").trim(), note: String(item.note || "").trim(), excerpt: String(item.excerpt || "").trim(), content, wordCount: Number.isFinite(storedWordCount) && storedWordCount >= 0 ? Math.round(storedWordCount) : wordCount(content), imported: Boolean(item.imported), archived: Boolean(item.archived) };
+    const pageTexts = Array.isArray(item.pageTexts) ? item.pageTexts.map((page) => {
+      const number = Number(page?.page);
+      const text = String(page?.text || "").trim();
+      return { page: Number.isFinite(number) && number > 0 ? Math.round(number) : 0, text };
+    }).filter((page) => page.page && page.text) : [];
+    const pageCount = Number(item.pageCount);
+    return { ...item, id: String(item.id || newId(`source-${index + 1}`)).trim(), title: String(item.title || "Fuente sin título").trim(), kind: String(item.kind || "Fuente").trim(), author: String(item.author || "Procedencia no indicada").trim(), location: String(item.location || "").trim(), url: String(item.url || "").trim(), edition: String(item.edition || "").trim(), publisher: String(item.publisher || "").trim(), year: String(item.year || "").trim(), accessedAt: String(item.accessedAt || "").trim(), pages: String(item.pages || "Sin paginar").trim(), note: String(item.note || "").trim(), excerpt: String(item.excerpt || "").trim(), content, format: String(item.format || "").trim(), pageCount: Number.isFinite(pageCount) && pageCount >= 0 ? Math.round(pageCount) : 0, pageTexts, wordCount: Number.isFinite(storedWordCount) && storedWordCount >= 0 ? Math.round(storedWordCount) : wordCount(content), imported: Boolean(item.imported), archived: Boolean(item.archived) };
   });
   normalized.evidence = Array.isArray(normalized.evidence) ? normalized.evidence.map((evidence, index) => {
     const item = evidence && typeof evidence === "object" ? evidence : {};
@@ -691,6 +698,54 @@ function sourceCitation(source) {
   return parts.length ? parts.join(". ") : "Referencia bibliográfica todavía incompleta.";
 }
 
+function loadPdfJs() {
+  if (!pdfJsPromise) {
+    pdfJsPromise = import("./vendor/pdfjs/pdf.min.mjs").then((pdfjsLib) => {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", document.baseURI).href;
+      return pdfjsLib;
+    }).catch((error) => {
+      pdfJsPromise = null;
+      throw error;
+    });
+  }
+  return pdfJsPromise;
+}
+
+async function extractPdfText(file) {
+  const pdfjsLib = await loadPdfJs();
+  const buffer = await file.arrayBuffer();
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+  const pdf = await loadingTask.promise;
+  const pageCount = pdf.numPages;
+  const pageTexts = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items.map((item) => `${item.str || ""}${item.hasEOL ? "\n" : " "}`).join("").replace(/[ \t]+\n/g, "\n").replace(/[ \t]{2,}/g, " ").trim();
+      if (pageText) pageTexts.push({ page: pageNumber, text: pageText });
+    }
+  } finally {
+    try { await pdf.destroy(); } catch { /* El texto ya fue extraído. */ }
+  }
+  return { pageCount, pageTexts, content: pageTexts.map((page) => `[Página ${page.page}]\n${page.text}`).join("\n\n") };
+}
+
+function sourceTextMarkup(source) {
+  const pageTexts = Array.isArray(source.pageTexts) ? source.pageTexts : [];
+  if (pageTexts.length) {
+    const pageSummary = source.pageCount && pageTexts.length < source.pageCount
+      ? `Leer texto extraído · ${pageTexts.length} de ${source.pageCount} páginas`
+      : `Leer texto extraído · ${pageTexts.length} páginas`;
+    return `<details class="source-full-text"><summary>${pageSummary}</summary><div class="source-pages">${pageTexts.map((page) => `<section class="source-page" data-page="${escapeHtml(page.page)}"><div class="source-page-label">Página ${escapeHtml(page.page)}</div><pre class="source-page-text">${escapeHtml(page.text)}</pre></section>`).join("")}</div><div class="source-reader-hint">Seleccioná un pasaje de una página y después elegí “Crear evidencia desde este texto”. La ubicación se completará como “p. N”.</div></details>`;
+  }
+  if (source.content) return `<details class="source-full-text"><summary>Leer contenido completo</summary><pre>${escapeHtml(source.content)}</pre><div class="source-reader-hint">Seleccioná un pasaje y después elegí “Crear evidencia desde este texto”.</div></details>`;
+  if (source.format === "pdf" || source.kind.toLowerCase().includes("pdf")) {
+    return `<div class="source-empty-content">No se encontró texto seleccionable. Puede ser un PDF escaneado; Cronista todavía no hace OCR.</div>`;
+  }
+  return `<div class="source-empty-content">Contenido completo no incorporado</div>`;
+}
+
 function sourceReferenceMarkdown(source) {
   const details = [sourceCitation(source), source.pages && source.pages !== "Sin paginar" ? `páginas: ${source.pages}` : "", source.location ? `ubicación: ${source.location}` : "", source.url ? `URL: ${source.url}` : "", source.accessedAt ? `consulta: ${source.accessedAt}` : ""].filter(Boolean);
   return `- ${details.join(" · ")}`;
@@ -874,10 +929,11 @@ const views = {
 
 function sourceCard(source) {
   const words = sourceWordCount(source);
-  const fullText = source.content || "";
+  const hasFullText = Boolean(source.content || (Array.isArray(source.pageTexts) && source.pageTexts.length));
   const citation = sourceCitation(source);
   const archivedLabel = source.archived ? `<span class="status-pill pendiente">Archivada</span>` : "";
-  return `<article class="source-card ${source.archived ? "is-archived" : ""}" data-source-id="${escapeHtml(source.id)}"><div class="source-card-top"><div><div class="source-kind">${escapeHtml(source.kind)}</div><h3>${escapeHtml(source.title)}</h3><div class="source-author">${escapeHtml(source.author || "Procedencia no indicada")}</div></div><div class="source-badge">${source.imported ? "Importada" : "Conectada"}</div></div><div class="source-meta"><span class="meta-chip">${escapeHtml(source.pages || "Sin paginar")}</span>${words ? `<span class="meta-chip">${words.toLocaleString("es-UY")} palabras conservadas</span>` : ""}${archivedLabel}</div><p class="source-citation">${escapeHtml(citation)}${source.accessedAt ? ` · Consultada el ${escapeHtml(source.accessedAt)}` : ""}</p><p class="source-note">${escapeHtml(source.note || "Sin nota de trabajo todavía.")}</p>${source.location ? sourceLocationMarkup(source.location) : ""}${source.url ? sourceLocationMarkup(source.url) : ""}${source.excerpt ? `<div class="source-preview">${escapeHtml(source.excerpt)}</div>` : ""}${fullText ? `<details class="source-full-text"><summary>Leer contenido completo</summary><pre>${escapeHtml(fullText)}</pre><div class="source-reader-hint">Seleccioná un pasaje y después elegí “Crear evidencia desde este texto”.</div></details>` : `<div class="source-empty-content">Contenido completo no incorporado</div>`}<div class="source-card-actions"><button class="text-button" data-action="compose-evidence" data-source-id="${escapeHtml(source.id)}">${fullText ? "Crear evidencia desde este texto" : "Crear evidencia vinculada"}</button><button class="text-button" data-action="edit-source" data-source-id="${escapeHtml(source.id)}">Editar</button><button class="text-button danger-text" data-action="delete-source" data-source-id="${escapeHtml(source.id)}">Eliminar</button></div></article>`;
+  const pageMeta = source.pageCount ? `<span class="meta-chip">${source.pageTexts.length} de ${source.pageCount} páginas con texto</span>` : "";
+  return `<article class="source-card ${source.archived ? "is-archived" : ""}" data-source-id="${escapeHtml(source.id)}"><div class="source-card-top"><div><div class="source-kind">${escapeHtml(source.kind)}</div><h3>${escapeHtml(source.title)}</h3><div class="source-author">${escapeHtml(source.author || "Procedencia no indicada")}</div></div><div class="source-badge">${source.imported ? "Importada" : "Conectada"}</div></div><div class="source-meta"><span class="meta-chip">${escapeHtml(source.pages || "Sin paginar")}</span>${pageMeta}${words ? `<span class="meta-chip">${words.toLocaleString("es-UY")} palabras conservadas</span>` : ""}${archivedLabel}</div><p class="source-citation">${escapeHtml(citation)}${source.accessedAt ? ` · Consultada el ${escapeHtml(source.accessedAt)}` : ""}</p><p class="source-note">${escapeHtml(source.note || "Sin nota de trabajo todavía.")}</p>${source.location ? sourceLocationMarkup(source.location) : ""}${source.url ? sourceLocationMarkup(source.url) : ""}${source.excerpt ? `<div class="source-preview">${escapeHtml(source.excerpt)}</div>` : ""}${sourceTextMarkup(source)}<div class="source-card-actions"><button class="text-button" data-action="compose-evidence" data-source-id="${escapeHtml(source.id)}">${hasFullText ? "Crear evidencia desde este texto" : "Crear evidencia vinculada"}</button><button class="text-button" data-action="edit-source" data-source-id="${escapeHtml(source.id)}">Editar</button><button class="text-button danger-text" data-action="delete-source" data-source-id="${escapeHtml(source.id)}">Eliminar</button></div></article>`;
 }
 
 function chapterEditor(chapter, index) {
@@ -1059,13 +1115,14 @@ document.addEventListener("click", (event) => {
   if (action === "compose-evidence") {
     const source = sourceById(actionTarget.dataset.sourceId);
     const selection = selectedSourceSelection.sourceId === source?.id ? selectedSourceSelection.text : "";
-    selectedSourceSelection = { sourceId: "", text: "" };
-    evidenceDraft = { sourceId: source?.id || "", supportingText: selection, location: "" };
+    const selectionLocation = selectedSourceSelection.sourceId === source?.id ? selectedSourceSelection.location : "";
+    selectedSourceSelection = { sourceId: "", text: "", location: "" };
+    evidenceDraft = { sourceId: source?.id || "", supportingText: selection, location: selectionLocation };
     evidenceFilter = "";
     activeView = "evidence";
     render();
     setTimeout(() => { const statement = $("#new-evidence-form [name=statement]"); statement?.focus(); statement?.scrollIntoView({ behavior: "smooth", block: "center" }); }, 0);
-    showToast(selection ? "Fragmento preparado para una evidencia" : "Fuente vinculada para una nueva evidencia");
+    showToast(selection ? `Fragmento preparado${selectionLocation ? ` · ${selectionLocation}` : ""}` : "Fuente vinculada para una nueva evidencia");
     return;
   }
   if (action === "save-manuscript") { persist().then((result) => { syncEditorStatus(result.ok ? "Guardado ahora" : "⚠ No se pudo guardar"); showToast(result.ok ? "Manuscrito guardado localmente" : "No se pudo guardar. Exportá una copia."); }); return; }
@@ -1077,11 +1134,12 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("mouseup", (event) => {
-  const textContainer = event.target.closest(".source-full-text pre");
+  const textContainer = event.target.closest(".source-full-text pre, .source-page-text");
   if (!textContainer) return;
   const sourceCard = textContainer.closest(".source-card");
   const text = window.getSelection()?.toString().trim() || "";
-  if (sourceCard && text) selectedSourceSelection = { sourceId: sourceCard.dataset.sourceId, text };
+  const page = textContainer.closest("[data-page]")?.dataset.page || "";
+  if (sourceCard && text) selectedSourceSelection = { sourceId: sourceCard.dataset.sourceId, text, location: page ? `p. ${page}` : "" };
 });
 
 document.addEventListener("input", (event) => {
@@ -1161,7 +1219,7 @@ $("#source-form").addEventListener("submit", (event) => {
   const content = String(form.get("content") || "").trim();
   const sourceId = String(form.get("sourceId") || "").trim();
   const existingSource = sourceId ? sourceById(sourceId) : null;
-  const sourceData = { title, kind: String(form.get("kind") || "Fuente").trim(), author: String(form.get("author") || "Procedencia no indicada").trim(), location: String(form.get("location") || "").trim(), url: String(form.get("url") || "").trim(), edition: String(form.get("edition") || "").trim(), publisher: String(form.get("publisher") || "").trim(), year: String(form.get("year") || "").trim(), accessedAt: String(form.get("accessedAt") || "").trim(), pages: existingSource?.pages || "Sin paginar", note: String(form.get("note") || "").trim(), excerpt: content.replace(/\s+/g, " ").slice(0, 430), content, wordCount: wordCount(content), imported: existingSource ? Boolean(existingSource.imported) : true, archived: existingSource ? Boolean(existingSource.archived) : false };
+  const sourceData = { title, kind: String(form.get("kind") || "Fuente").trim(), author: String(form.get("author") || "Procedencia no indicada").trim(), location: String(form.get("location") || "").trim(), url: String(form.get("url") || "").trim(), edition: String(form.get("edition") || "").trim(), publisher: String(form.get("publisher") || "").trim(), year: String(form.get("year") || "").trim(), accessedAt: String(form.get("accessedAt") || "").trim(), pages: existingSource?.pages || "Sin paginar", note: String(form.get("note") || "").trim(), excerpt: content.replace(/\s+/g, " ").slice(0, 430), content, format: existingSource?.format || "", pageCount: existingSource?.pageCount || 0, pageTexts: existingSource?.pageTexts || [], wordCount: wordCount(content), imported: existingSource ? Boolean(existingSource.imported) : true, archived: existingSource ? Boolean(existingSource.archived) : false };
   if (sourceId) {
     const index = state.sources.findIndex((source) => source.id === sourceId);
     if (index >= 0) state.sources[index] = { ...state.sources[index], ...sourceData };
@@ -1201,15 +1259,33 @@ $("#file-input").addEventListener("change", async (event) => {
   if (!file) return;
   const extension = file.name.split(".").pop().toLowerCase();
   let text = "";
+  let pageTexts = [];
+  let pageCount = 0;
+  let note = "Archivo importado desde este navegador. El contenido completo queda guardado localmente; revisalo antes de usarlo como evidencia.";
+  let importMessage = `Fuente importada: ${file.name}`;
   if (extension !== "pdf") {
     try { text = await file.text(); } catch { text = ""; }
+  } else {
+    showToast("Extrayendo texto del PDF…");
+    try {
+      const extracted = await extractPdfText(file);
+      ({ pageTexts, pageCount, content: text } = extracted);
+      note = pageTexts.length
+        ? `Texto extraído localmente de ${pageTexts.length} de ${pageCount} páginas. Revisalo antes de usarlo como evidencia.`
+        : "No se encontró texto seleccionable. Puede ser un PDF escaneado; Cronista todavía no hace OCR.";
+      if (!pageTexts.length) importMessage = `PDF importado sin texto seleccionable: ${file.name}`;
+    } catch (error) {
+      console.warn("No se pudo extraer texto del PDF", error);
+      note = "No se pudo extraer texto de este PDF. Puede ser escaneado o usar una estructura no compatible; conservá una transcripción TXT/Markdown revisada.";
+      importMessage = `PDF importado, pero no se pudo extraer el texto: ${file.name}`;
+    }
   }
-  const source = { id: newId("file"), title: file.name.replace(/\.[^.]+$/, "") || "Archivo importado", kind: extension.toUpperCase() === "MD" ? "Markdown importado" : `${extension.toUpperCase() || "Archivo"} importado`, author: "Archivo local", location: file.name, pages: `${Math.round(file.size / 1024)} KB`, note: extension === "pdf" ? "PDF agregado como referencia local. La extracción de texto se puede incorporar desde un TXT o Markdown asociado." : "Archivo importado desde este navegador. El contenido completo queda guardado localmente; revisalo antes de usarlo como evidencia.", excerpt: text.replace(/\s+/g, " ").trim().slice(0, 430), content: text, wordCount: wordCount(text), imported: true };
+  const source = { id: newId("file"), title: file.name.replace(/\.[^.]+$/, "") || "Archivo importado", kind: extension.toUpperCase() === "MD" ? "Markdown importado" : `${extension.toUpperCase() || "Archivo"} importado`, author: "Archivo local", location: file.name, pages: extension === "pdf" ? (pageCount ? `${pageCount} páginas` : "PDF local") : `${Math.round(file.size / 1024)} KB`, note, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 430), content: text, format: extension, pageCount, pageTexts, wordCount: wordCount(text), imported: true };
   state.sources.push(source);
   persist();
   event.target.value = "";
   render();
-  showToast(`Fuente importada: ${file.name}`);
+  showToast(importMessage);
 });
 
 $("#project-file-input").addEventListener("change", async (event) => {

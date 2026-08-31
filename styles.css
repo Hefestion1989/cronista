@@ -146,6 +146,11 @@ h3 { margin: 0; font-size: 17px; font-weight: 400; }
 .source-full-text { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 11px; }
 .source-full-text summary { cursor: pointer; color: var(--accent-dark); font: 700 11px system-ui, sans-serif; }
 .source-full-text pre { max-height: 360px; margin: 12px 0 0; padding: 13px; overflow: auto; border-radius: 7px; color: #5f5c53; background: #f3ede3; white-space: pre-wrap; font: 12px/1.55 Georgia, serif; }
+.source-pages { display: grid; gap: 10px; margin-top: 12px; }
+.source-page { padding: 12px; border: 1px solid #e0d7c7; border-radius: 8px; background: #fffdf8; }
+.source-page-label { color: var(--accent); font: 700 10px system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }
+.source-page-text { max-height: 270px; margin: 8px 0 0; padding: 0; overflow: auto; color: #5f5c53; background: transparent; user-select: text; white-space: pre-wrap; font: 12px/1.55 Georgia, serif; }
+.source-page-text::selection, .source-full-text pre::selection { background: #ecd39b; }
 .source-reader-hint { margin-top: 10px; color: var(--muted); font: 10px/1.4 system-ui, sans-serif; }
 .source-location-link { display: inline-block; margin-top: 11px; color: var(--accent-dark); font: 11px system-ui, sans-serif; text-decoration: underline; text-underline-offset: 3px; }
 .source-card-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--line); }

@@ -29,8 +29,9 @@ El recorrido básico es sencillo:
 - Proyecto inicial de muestra para explorar el flujo editorial.
 - Proyecto demostrativo local de *Ismael*, novela histórica uruguaya de Eduardo Acevedo Díaz.
 - Proyecto demostrativo hispanoamericano de *Amalia*, de José Mármol.
-- Importación de TXT, Markdown, CSV, JSON, JSONL y PDF como referencia local.
-- Conservación local del contenido completo de archivos de texto importados.
+- Importación de TXT, Markdown, CSV, JSON, JSONL y PDF.
+- Extracción local del texto de los PDF por página, sin enviar documentos a un servidor.
+- Conservación local del contenido completo de archivos de texto importados y de las páginas extraídas.
 - Registro de evidencias con fuente, ubicación, fragmento de respaldo, clasificación, estado y notas.
 - Mapa de trazabilidad que conecta afirmaciones, evidencias, fuentes y capítulos relacionados.
 - Búsqueda dentro de fuentes y evidencias.
@@ -60,6 +61,8 @@ El estado de guardado aparece dentro de la aplicación. Si el navegador rechaza 
 Si alguna vez tuvo que usar el almacenamiento de compatibilidad, al volver IndexedDB Cronista compara las fechas de actualización de ambas versiones y conserva la más reciente por proyecto.
 
 Esto no equivale a cifrado: otros procesos con acceso a la sesión de Windows podrían leer esos datos. Antes de publicar una copia, revisá las fuentes, las rutas, los textos importados y cualquier material privado.
+
+Los PDF con texto seleccionable se leen dentro del navegador mediante PDF.js, incluido localmente en `vendor/pdfjs/`. Los PDF escaneados pueden conservarse como referencia, pero esta versión todavía no hace OCR; para trabajar con ellos hace falta incorporar una transcripción revisada.
 
 Cronista tampoco verifica por sí solo la verdad histórica de una afirmación. La auditoría señala huecos mecánicos; la lectura crítica, el contraste documental y las decisiones narrativas siguen siendo responsabilidad de quien trabaja el libro.
 
