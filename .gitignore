@@ -1,0 +1,12 @@
+# Copias y exportaciones generadas por el uso local de Cronista
+*.cronista.json
+*-cronista.md
+exports/
+importados/
+datos-locales/
+.qa-temp/
+
+# Archivos temporales del sistema y del editor
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f1e8" />
+    <title>Cronista · taller de libros</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app-shell">
+      <aside class="sidebar">
+        <div class="brand-lockup">
+          <div class="brand-mark" aria-hidden="true">C</div>
+          <div>
+            <div class="brand-name">Cronista</div>
+            <div class="brand-subtitle">taller local de libros</div>
+          </div>
+        </div>
+
+        <div class="project-mini-card">
+          <div class="eyebrow">Biblioteca de proyectos</div>
+          <select id="project-selector" class="project-selector" aria-label="Elegir proyecto"></select>
+          <div id="sidebar-project-kind" class="muted"></div>
+          <button class="text-button project-new-button" data-action="open-project-dialog">+ Nuevo proyecto</button>
+        </div>
+
+        <nav id="main-nav" class="main-nav" aria-label="Secciones del proyecto">
+          <button class="nav-item active" data-action="view" data-view="overview"><span class="nav-icon">⌂</span> Panorama</button>
+          <button class="nav-item" data-action="view" data-view="sources"><span class="nav-icon">◫</span> Fuentes <span id="nav-source-count" class="nav-count"></span></button>
+          <button class="nav-item" data-action="view" data-view="evidence"><span class="nav-icon">▤</span> Evidencias <span id="nav-evidence-count" class="nav-count"></span></button>
+          <button class="nav-item" data-action="view" data-view="structure"><span class="nav-icon">☷</span> Arquitectura <span id="nav-chapter-count" class="nav-count"></span></button>
+          <button class="nav-item" data-action="view" data-view="manuscript"><span class="nav-icon">✎</span> Manuscrito</button>
+          <button class="nav-item" data-action="view" data-view="audit"><span class="nav-icon">✓</span> Auditor editorial</button>
+          <button class="nav-item" data-action="view" data-view="study"><span class="nav-icon">✦</span> Modo estudio</button>
+        </nav>
+
+        <div class="sidebar-bottom">
+          <div class="privacy-card">
+            <div class="privacy-title"><span class="status-dot"></span> Local por diseño</div>
+            <p>Tus proyectos se guardan en este navegador. Cronista no sube tus textos automáticamente.</p>
+          </div>
+          <button class="text-button" data-action="reset-demo">Restaurar proyecto de prueba</button>
+          <button class="text-button" data-action="import-json">Importar copia JSON</button>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <div>
+            <div id="page-kicker" class="eyebrow">Taller editorial</div>
+            <h1 id="page-title">Panorama</h1>
+          </div>
+          <div class="top-actions">
+            <button class="button secondary" data-action="open-source-dialog">+ Añadir fuente</button>
+            <button class="button secondary" data-action="export-json">Copia JSON</button>
+            <button class="button primary" data-action="export">Exportar este proyecto</button>
+          </div>
+        </header>
+
+        <div id="app-content" class="content-wrap"></div>
+      </main>
+    </div>
+
+    <dialog id="source-dialog" class="source-dialog">
+      <form id="source-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">Nueva fuente</div>
+            <h2>Sumar material al proyecto</h2>
+          </div>
+          <button class="icon-button" value="cancel" formnovalidate aria-label="Cerrar">×</button>
+        </div>
+        <label>Nombre de la fuente<input name="title" required placeholder="Ej. Carta, libro o entrevista" /></label>
+        <div class="form-grid">
+          <label>Tipo<select name="kind"><option>Libro</option><option>PDF</option><option>Artículo</option><option>Apunte propio</option><option>Archivo</option><option>Entrevista</option></select></label>
+          <label>Autor o procedencia<input name="author" placeholder="Quién o de dónde proviene" /></label>
+        </div>
+        <label>Referencia local o enlace<input name="location" placeholder="Ruta, URL o nota de ubicación" /></label>
+        <label>Nota de trabajo<textarea name="note" rows="3" placeholder="Qué aporta esta fuente y qué conviene revisar"></textarea></label>
+        <label>Contenido del texto (opcional)<textarea name="content" rows="6" placeholder="Pegá acá el texto si no lo vas a importar como archivo"></textarea></label>
+        <div class="dialog-actions">
+          <button class="button secondary" value="cancel" formnovalidate>Cancelar</button>
+          <button class="button primary" value="default">Guardar fuente</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="project-dialog" class="source-dialog">
+      <form id="project-form" method="dialog">
+        <div class="dialog-header">
+          <div>
+            <div class="eyebrow">Nuevo proyecto</div>
+            <h2>Abrir otra mesa de trabajo</h2>
+          </div>
+          <button class="icon-button" value="cancel" formnovalidate aria-label="Cerrar">×</button>
+        </div>
+        <label>Nombre del proyecto<input name="title" required placeholder="Ej. Psicología de la memoria" /></label>
+        <div class="form-grid">
+          <label>Tipo<select name="type"><option>Libro histórico</option><option>Investigación</option><option>Libro de estudio</option><option>Novela</option><option>Ensayo</option><option>Otro texto</option></select></label>
+          <label>Meta de palabras<input name="targetWords" type="number" min="100" step="100" value="12000" /></label>
+        </div>
+        <label>Descripción<input name="description" required placeholder="Qué querés entender, contar o construir" /></label>
+        <label>Norte del proyecto<textarea name="premise" rows="3" placeholder="La pregunta o tensión que va a orientar el trabajo"></textarea></label>
+        <div class="dialog-actions">
+          <button class="button secondary" value="cancel" formnovalidate>Cancelar</button>
+          <button class="button primary" value="default">Crear proyecto</button>
+        </div>
+      </form>
+    </dialog>
+
+    <input id="file-input" type="file" hidden accept=".txt,.md,.markdown,.csv,.json,.jsonl,.pdf" />
+    <input id="project-file-input" type="file" hidden accept=".cronista.json,.json,application/json" />
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js" defer></script>
+  </body>
+</html>
