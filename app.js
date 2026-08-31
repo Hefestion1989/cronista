@@ -8,7 +8,11 @@ let storageDb = null;
 let storageMode = "starting";
 let storageState = "starting";
 let storageError = "";
+let storageNotice = "";
 let lastSavedAt = null;
+let pendingWrites = 0;
+let saveVersion = 0;
+let lastSavedVersion = 0;
 let storageReady = Promise.resolve();
 let saveQueue = Promise.resolve();
 
@@ -359,25 +363,31 @@ function normalizeProject(project) {
   return normalized;
 }
 
-function loadWorkspace() {
+function readLegacyWorkspace() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed.projects)) {
         const projects = parsed.projects.map(normalizeProject);
-        return withPublicDemos({ activeProjectId: parsed.activeProjectId || projects[0]?.project.id, projects });
+        return withPublicDemos({ activeProjectId: parsed.activeProjectId || projects[0]?.project.id, projects, updatedAt: String(parsed.updatedAt || "").trim(), deletedProjectIds: Array.isArray(parsed.deletedProjectIds) ? parsed.deletedProjectIds.map(String) : [] });
       }
       if (parsed.project) {
         const migrated = normalizeProject(parsed);
-        return withPublicDemos({ activeProjectId: migrated.project.id, projects: [migrated] });
+        return withPublicDemos({ activeProjectId: migrated.project.id, projects: [migrated], updatedAt: String(parsed.updatedAt || "").trim(), deletedProjectIds: [] });
       }
     }
   } catch (error) {
     console.warn("No se pudo cargar la biblioteca local", error);
   }
+  return null;
+}
+
+function loadWorkspace() {
+  const legacyWorkspace = readLegacyWorkspace();
+  if (legacyWorkspace) return legacyWorkspace;
   const ismael = cloneIsmaelDemo();
-  return withPublicDemos({ activeProjectId: ismael.project.id, projects: [ismael] });
+  return withPublicDemos({ activeProjectId: ismael.project.id, projects: [ismael], updatedAt: "", deletedProjectIds: [] });
 }
 
 function withPublicDemos(workspace) {
@@ -413,7 +423,54 @@ function openStorageDatabase() {
 async function readIndexedDbWorkspace(database) {
   const projects = await idbRequest(database.transaction(STORAGE_PROJECT_STORE, "readonly").objectStore(STORAGE_PROJECT_STORE).getAll());
   const active = await idbRequest(database.transaction(STORAGE_META_STORE, "readonly").objectStore(STORAGE_META_STORE).get("activeProjectId"));
-  return { activeProjectId: active?.value || projects[0]?.id || "", projects: projects.map((record) => normalizeProject(record?.data || record)) };
+  const synced = await idbRequest(database.transaction(STORAGE_META_STORE, "readonly").objectStore(STORAGE_META_STORE).get("lastSyncedAt"));
+  const deleted = await idbRequest(database.transaction(STORAGE_META_STORE, "readonly").objectStore(STORAGE_META_STORE).get("deletedProjectIds"));
+  return { activeProjectId: active?.value || projects[0]?.id || "", projects: projects.map((record) => normalizeProject(record?.data || record)), lastSyncedAt: synced?.value || "", deletedProjectIds: Array.isArray(deleted?.value) ? deleted.value.map(String) : [] };
+}
+
+function timestamp(value) {
+  const parsed = Date.parse(value || "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function reconcileStoredWorkspaces(indexedWorkspace, legacyWorkspace) {
+  if (!legacyWorkspace) return { ...indexedWorkspace, changed: false };
+  const projects = new Map(indexedWorkspace.projects.map((project) => [project.project.id, project]));
+  const legacyIsNewerThanSync = timestamp(legacyWorkspace.updatedAt) > timestamp(indexedWorkspace.lastSyncedAt);
+  const deletedProjectIds = new Set([...(indexedWorkspace.deletedProjectIds || [])]);
+  let changed = false;
+  let recoveredProjects = 0;
+  let removedProjects = 0;
+
+  if (legacyIsNewerThanSync) {
+    (legacyWorkspace.deletedProjectIds || []).forEach((projectId) => {
+      if (projects.delete(projectId)) { changed = true; removedProjects += 1; }
+      deletedProjectIds.add(projectId);
+    });
+  }
+  legacyWorkspace.projects.forEach((project) => {
+    const projectId = project.project.id;
+    if (deletedProjectIds.has(projectId)) return;
+    const indexedProject = projects.get(projectId);
+    if (!indexedProject && legacyIsNewerThanSync) {
+      projects.set(projectId, project);
+      changed = true;
+      recoveredProjects += 1;
+    } else if (indexedProject && timestamp(project.project.updatedAt) > timestamp(indexedProject.project.updatedAt)) {
+      projects.set(projectId, project);
+      changed = true;
+      recoveredProjects += 1;
+    }
+  });
+
+  const indexedActive = projects.get(indexedWorkspace.activeProjectId);
+  const legacyActive = projects.get(legacyWorkspace.activeProjectId);
+  let activeProjectId = indexedActive?.project.id || [...projects.keys()][0] || "";
+  if (legacyActive && (!indexedActive || timestamp(legacyActive.project.updatedAt) > timestamp(indexedActive.project.updatedAt))) {
+    activeProjectId = legacyActive.project.id;
+    if (activeProjectId !== indexedWorkspace.activeProjectId) changed = true;
+  }
+  return { activeProjectId, projects: [...projects.values()], deletedProjectIds: [...deletedProjectIds], lastSyncedAt: indexedWorkspace.lastSyncedAt, changed, recoveredProjects, removedProjects };
 }
 
 async function writeAllProjectsToIndexedDb(nextWorkspace) {
@@ -423,6 +480,8 @@ async function writeAllProjectsToIndexedDb(nextWorkspace) {
   projectsStore.clear();
   nextWorkspace.projects.map(normalizeProject).forEach((project) => projectsStore.put({ id: project.project.id, data: project }));
   metaStore.put({ key: "activeProjectId", value: nextWorkspace.activeProjectId });
+  metaStore.put({ key: "lastSyncedAt", value: new Date().toISOString() });
+  metaStore.put({ key: "deletedProjectIds", value: Array.isArray(nextWorkspace.deletedProjectIds) ? nextWorkspace.deletedProjectIds : [] });
   return new Promise((resolve, reject) => {
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error || new Error("No se pudo migrar la biblioteca."));
@@ -430,11 +489,16 @@ async function writeAllProjectsToIndexedDb(nextWorkspace) {
   });
 }
 
-async function writeProjectToIndexedDb(project, activeProjectId) {
+async function writeProjectToIndexedDb(project, activeProjectId, deleteProjectId = "", deletedProjectIds = []) {
   const transaction = storageDb.transaction([STORAGE_PROJECT_STORE, STORAGE_META_STORE], "readwrite");
   const normalized = normalizeProject(project);
-  transaction.objectStore(STORAGE_PROJECT_STORE).put({ id: normalized.project.id, data: normalized });
-  transaction.objectStore(STORAGE_META_STORE).put({ key: "activeProjectId", value: activeProjectId });
+  const projectsStore = transaction.objectStore(STORAGE_PROJECT_STORE);
+  if (deleteProjectId) projectsStore.delete(deleteProjectId);
+  projectsStore.put({ id: normalized.project.id, data: normalized });
+  const metaStore = transaction.objectStore(STORAGE_META_STORE);
+  metaStore.put({ key: "activeProjectId", value: activeProjectId });
+  metaStore.put({ key: "lastSyncedAt", value: new Date().toISOString() });
+  metaStore.put({ key: "deletedProjectIds", value: deletedProjectIds });
   return new Promise((resolve, reject) => {
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error || new Error("No se pudo guardar el proyecto."));
@@ -443,6 +507,7 @@ async function writeProjectToIndexedDb(project, activeProjectId) {
 }
 
 function writeLegacyWorkspace() {
+  workspace.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(workspace));
 }
 
@@ -451,7 +516,7 @@ function updateStorageStatusUi() {
   if (!status) return;
   let message = "Preparando guardado local…";
   let className = "storage-status pending";
-  if (storageState === "saving") { message = "Guardando cambios…"; className = "storage-status saving"; }
+  if (pendingWrites > 0 || storageState === "saving") { message = pendingWrites > 1 ? `Guardando cambios… (${pendingWrites} pendientes)` : "Guardando cambios…"; className = "storage-status saving"; }
   if (storageState === "saved") { message = "Guardado local"; className = "storage-status saved"; }
   if (storageMode === "localstorage" && storageState !== "error") { message = "Guardado local de compatibilidad"; className = "storage-status warning"; }
   if (storageState === "error") { message = "⚠ No se pudo guardar · exportá una copia"; className = "storage-status error"; }
@@ -472,7 +537,14 @@ async function initializeStorage() {
     storageDb = await openStorageDatabase();
     const storedWorkspace = await readIndexedDbWorkspace(storageDb);
     if (storedWorkspace.projects.length) {
-      adoptWorkspace(storedWorkspace);
+      const reconciledWorkspace = reconcileStoredWorkspaces(storedWorkspace, readLegacyWorkspace());
+      if (reconciledWorkspace.changed) await writeAllProjectsToIndexedDb(reconciledWorkspace);
+      if (reconciledWorkspace.recoveredProjects || reconciledWorkspace.removedProjects) {
+        const recovered = reconciledWorkspace.recoveredProjects ? `${reconciledWorkspace.recoveredProjects} proyecto(s) recuperado(s)` : "";
+        const removed = reconciledWorkspace.removedProjects ? `${reconciledWorkspace.removedProjects} eliminación(es) sincronizada(s)` : "";
+        storageNotice = [recovered, removed].filter(Boolean).join(" · ");
+      }
+      adoptWorkspace(reconciledWorkspace);
     } else {
       await writeAllProjectsToIndexedDb(workspace);
     }
@@ -481,6 +553,7 @@ async function initializeStorage() {
     storageError = "";
     lastSavedAt = new Date();
     render();
+    if (storageNotice) showToast(storageNotice);
   } catch (error) {
     storageMode = "localstorage";
     storageState = "saved";
@@ -496,34 +569,32 @@ function persist({ deleteProjectId = "" } = {}) {
   workspace.projects = workspace.projects.map((project) => project.project.id === state.project.id ? state : project);
   const projectSnapshot = normalizeProject(JSON.parse(JSON.stringify(state)));
   const activeProjectId = workspace.activeProjectId;
+  const version = ++saveVersion;
+  pendingWrites += 1;
   storageState = "saving";
   storageError = "";
   updateStorageStatusUi();
   const write = saveQueue.then(async () => {
     await storageReady;
     if (storageMode === "indexeddb" && storageDb) {
-      if (deleteProjectId) {
-        const transaction = storageDb.transaction(STORAGE_PROJECT_STORE, "readwrite");
-        transaction.objectStore(STORAGE_PROJECT_STORE).delete(deleteProjectId);
-        await new Promise((resolve, reject) => {
-          transaction.oncomplete = resolve;
-          transaction.onerror = () => reject(transaction.error || new Error("No se pudo retirar el proyecto."));
-          transaction.onabort = () => reject(transaction.error || new Error("La eliminación fue interrumpida."));
-        });
-      }
-      await writeProjectToIndexedDb(projectSnapshot, activeProjectId);
+      await writeProjectToIndexedDb(projectSnapshot, activeProjectId, deleteProjectId, workspace.deletedProjectIds || []);
     } else writeLegacyWorkspace();
   });
   saveQueue = write.catch(() => undefined);
   return write.then(() => {
-    storageState = "saved";
-    storageError = "";
-    lastSavedAt = new Date();
+    pendingWrites = Math.max(0, pendingWrites - 1);
+    lastSavedVersion = Math.max(lastSavedVersion, version);
+    if (pendingWrites === 0) {
+      storageState = "saved";
+      storageError = "";
+      lastSavedAt = new Date();
+    } else storageState = "saving";
     updateStorageStatusUi();
     return { ok: true };
   }).catch((error) => {
-    storageState = "error";
+    pendingWrites = Math.max(0, pendingWrites - 1);
     storageError = error?.message || "No se pudo guardar la biblioteca.";
+    storageState = pendingWrites === 0 ? "error" : "saving";
     updateStorageStatusUi();
     console.warn("No se pudo guardar la biblioteca local", error);
     return { ok: false, error };
@@ -562,6 +633,7 @@ function deleteProject() {
   const deletedProjectId = state.project.id;
   const nextProject = workspace.projects.find((project) => project.project.id !== deletedProjectId);
   workspace.projects = workspace.projects.filter((project) => project.project.id !== deletedProjectId);
+  workspace.deletedProjectIds = [...new Set([...(workspace.deletedProjectIds || []), deletedProjectId])];
   state = nextProject || cloneStarter();
   workspace.activeProjectId = state.project.id;
   selectedChapterId = state.chapters[0]?.id || null;
@@ -1111,6 +1183,7 @@ $("#project-form").addEventListener("submit", (event) => {
   if (!title || !description) { showToast("Completá el nombre y la descripción del proyecto"); return; }
   const project = createEmptyProject({ title, type: form.get("type"), description, premise: form.get("premise"), targetWords: form.get("targetWords") });
   workspace.projects.push(project);
+  workspace.deletedProjectIds = (workspace.deletedProjectIds || []).filter((projectId) => projectId !== project.project.id);
   state = project;
   workspace.activeProjectId = project.project.id;
   sourceFilter = "";
@@ -1148,6 +1221,7 @@ $("#project-file-input").addEventListener("change", async (event) => {
     imported.project.id = newId("project");
     imported.project.title = workspace.projects.some((project) => project.project.title === originalTitle) ? `${originalTitle} (importado)` : originalTitle;
     workspace.projects.push(imported);
+    workspace.deletedProjectIds = (workspace.deletedProjectIds || []).filter((projectId) => projectId !== imported.project.id);
     state = imported;
     workspace.activeProjectId = state.project.id;
     sourceFilter = "";

@@ -57,6 +57,8 @@ La aplicación funciona como herramienta local y guarda los proyectos en Indexed
 
 El estado de guardado aparece dentro de la aplicación. Si el navegador rechaza un guardado, Cronista lo informa y recomienda exportar una copia JSON. Para material importante, mantené igualmente copias externas periódicas.
 
+Si alguna vez tuvo que usar el almacenamiento de compatibilidad, al volver IndexedDB Cronista compara las fechas de actualización de ambas versiones y conserva la más reciente por proyecto.
+
 Esto no equivale a cifrado: otros procesos con acceso a la sesión de Windows podrían leer esos datos. Antes de publicar una copia, revisá las fuentes, las rutas, los textos importados y cualquier material privado.
 
 Cronista tampoco verifica por sí solo la verdad histórica de una afirmación. La auditoría señala huecos mecánicos; la lectura crítica, el contraste documental y las decisiones narrativas siguen siendo responsabilidad de quien trabaja el libro.

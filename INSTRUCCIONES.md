@@ -100,6 +100,8 @@ Cronista funciona localmente y guarda los proyectos en IndexedDB, un almacenamie
 
 El indicador de la barra lateral muestra si el guardado está preparado, en curso o terminado. Si aparece una advertencia, exportá una copia JSON antes de seguir trabajando. El almacenamiento local no es cifrado: cualquier proceso o usuario con acceso a esa sesión de Windows podría llegar a esos datos.
 
+Si una biblioteca tuvo que continuar temporalmente en el almacenamiento de compatibilidad y después IndexedDB vuelve a estar disponible, Cronista compara `updatedAt` y conserva la versión más reciente de cada proyecto. Aun así, una copia JSON externa sigue siendo el respaldo más claro.
+
 Antes de compartir o publicar el repositorio, revisá que no haya exportaciones, archivos importados, rutas personales ni material privado. La aplicación pública incluye ejemplos y documentación, no una biblioteca personal.
 
 ## Si algo sale mal
