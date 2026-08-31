@@ -23,6 +23,24 @@ El recorrido básico es sencillo:
 5. **Rastrear:** seguís afirmaciones, fuentes, ubicaciones y capítulos desde el mapa de trazabilidad.
 6. **Revisar y exportar:** usás el auditor editorial, el modo estudio y las exportaciones Markdown/JSON.
 
+## Explicado sin tecnicismos
+
+Cronista es una mesa de trabajo para investigar y escribir libros.
+
+Permite reunir libros, PDFs, apuntes y entrevistas; ordenar qué aporta cada fuente; guardar fragmentos importantes con su página; separar los hechos de las interpretaciones; organizar capítulos y redactar el manuscrito.
+
+También incluye un mapa de trazabilidad para saber de dónde sale cada afirmación y una auditoría editorial que señala qué partes necesitan más respaldo o revisión.
+
+Aunque el menú parezca amplio, no hace falta usar todo desde el principio. Se puede empezar de manera muy simple:
+
+1. Crear un proyecto.
+2. Agregar una fuente, incluso un PDF.
+3. Registrar una idea o evidencia.
+4. Organizar un capítulo.
+5. Escribir y revisar.
+
+Cronista funciona localmente en el navegador: tus textos y documentos no se suben automáticamente a internet. La herramienta acompaña el proceso desde la primera lectura hasta un manuscrito más claro, ordenado y verificable.
+
 ## Qué incluye esta versión
 
 - Biblioteca de varios proyectos, aislados entre sí para no mezclar fuentes ni manuscritos.
