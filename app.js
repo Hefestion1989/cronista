@@ -355,7 +355,14 @@ function normalizeProject(project) {
       return { page: Number.isFinite(number) && number > 0 ? Math.round(number) : 0, text };
     }).filter((page) => page.page && page.text) : [];
     const pageCount = Number(item.pageCount);
-    return { ...item, id: String(item.id || newId(`source-${index + 1}`)).trim(), title: String(item.title || "Fuente sin título").trim(), kind: String(item.kind || "Fuente").trim(), author: String(item.author || "Procedencia no indicada").trim(), location: String(item.location || "").trim(), url: String(item.url || "").trim(), edition: String(item.edition || "").trim(), publisher: String(item.publisher || "").trim(), year: String(item.year || "").trim(), accessedAt: String(item.accessedAt || "").trim(), pages: String(item.pages || "Sin paginar").trim(), note: String(item.note || "").trim(), excerpt: String(item.excerpt || "").trim(), content, format: String(item.format || "").trim(), pageCount: Number.isFinite(pageCount) && pageCount >= 0 ? Math.round(pageCount) : 0, pageTexts, wordCount: Number.isFinite(storedWordCount) && storedWordCount >= 0 ? Math.round(storedWordCount) : wordCount(content), imported: Boolean(item.imported), archived: Boolean(item.archived) };
+    const kind = String(item.kind || "Fuente").trim();
+    const format = String(item.format || "").trim().toLowerCase();
+    const isPdf = format === "pdf" || kind.toLowerCase().includes("pdf");
+    const canonicalContent = isPdf && pageTexts.length ? "" : content;
+    const normalizedPageCount = pageCount > 0 ? Math.round(pageCount) : pageTexts.reduce((highest, page) => Math.max(highest, page.page), 0);
+    const excerpt = isPdf && pageTexts.length ? pageTexts.map((page) => page.text).join(" ").slice(0, 430) : String(item.excerpt || "").trim();
+    const pageWordCount = pageTexts.reduce((total, page) => total + wordCount(page.text), 0);
+    return { ...item, id: String(item.id || newId(`source-${index + 1}`)).trim(), title: String(item.title || "Fuente sin título").trim(), kind, author: String(item.author || "Procedencia no indicada").trim(), location: String(item.location || "").trim(), url: String(item.url || "").trim(), edition: String(item.edition || "").trim(), publisher: String(item.publisher || "").trim(), year: String(item.year || "").trim(), accessedAt: String(item.accessedAt || "").trim(), pages: String(item.pages || "Sin paginar").trim(), note: String(item.note || "").trim(), excerpt, content: canonicalContent, format: isPdf ? "pdf" : format, pageCount: normalizedPageCount, pageTexts, wordCount: Number.isFinite(storedWordCount) && storedWordCount >= 0 ? Math.round(storedWordCount) : pageWordCount || wordCount(canonicalContent), imported: Boolean(item.imported), archived: Boolean(item.archived) };
   });
   normalized.evidence = Array.isArray(normalized.evidence) ? normalized.evidence.map((evidence, index) => {
     const item = evidence && typeof evidence === "object" ? evidence : {};
@@ -484,11 +491,14 @@ async function writeAllProjectsToIndexedDb(nextWorkspace) {
   const transaction = storageDb.transaction([STORAGE_PROJECT_STORE, STORAGE_META_STORE], "readwrite");
   const projectsStore = transaction.objectStore(STORAGE_PROJECT_STORE);
   const metaStore = transaction.objectStore(STORAGE_META_STORE);
+  const tombstones = new Set((Array.isArray(nextWorkspace.deletedProjectIds) ? nextWorkspace.deletedProjectIds : []).map((projectId) => String(projectId)).filter(Boolean));
+  const projects = nextWorkspace.projects.map(normalizeProject).filter((project) => !tombstones.has(project.project.id));
+  const activeProjectId = projects.some((project) => project.project.id === nextWorkspace.activeProjectId) ? nextWorkspace.activeProjectId : projects[0]?.project.id || "";
   projectsStore.clear();
-  nextWorkspace.projects.map(normalizeProject).forEach((project) => projectsStore.put({ id: project.project.id, data: project }));
-  metaStore.put({ key: "activeProjectId", value: nextWorkspace.activeProjectId });
+  projects.forEach((project) => projectsStore.put({ id: project.project.id, data: project }));
+  metaStore.put({ key: "activeProjectId", value: activeProjectId });
   metaStore.put({ key: "lastSyncedAt", value: new Date().toISOString() });
-  metaStore.put({ key: "deletedProjectIds", value: Array.isArray(nextWorkspace.deletedProjectIds) ? nextWorkspace.deletedProjectIds : [] });
+  metaStore.put({ key: "deletedProjectIds", value: [...tombstones] });
   return new Promise((resolve, reject) => {
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error || new Error("No se pudo migrar la biblioteca."));
@@ -500,12 +510,14 @@ async function writeProjectToIndexedDb(project, activeProjectId, deleteProjectId
   const transaction = storageDb.transaction([STORAGE_PROJECT_STORE, STORAGE_META_STORE], "readwrite");
   const normalized = normalizeProject(project);
   const projectsStore = transaction.objectStore(STORAGE_PROJECT_STORE);
-  if (deleteProjectId) projectsStore.delete(deleteProjectId);
+  const tombstones = new Set((Array.isArray(deletedProjectIds) ? deletedProjectIds : []).map((projectId) => String(projectId)).filter(Boolean));
+  if (deleteProjectId) tombstones.add(String(deleteProjectId));
+  tombstones.forEach((projectId) => projectsStore.delete(projectId));
   projectsStore.put({ id: normalized.project.id, data: normalized });
   const metaStore = transaction.objectStore(STORAGE_META_STORE);
   metaStore.put({ key: "activeProjectId", value: activeProjectId });
   metaStore.put({ key: "lastSyncedAt", value: new Date().toISOString() });
-  metaStore.put({ key: "deletedProjectIds", value: deletedProjectIds });
+  metaStore.put({ key: "deletedProjectIds", value: [...tombstones] });
   return new Promise((resolve, reject) => {
     transaction.oncomplete = resolve;
     transaction.onerror = () => reject(transaction.error || new Error("No se pudo guardar el proyecto."));
@@ -539,10 +551,20 @@ function adoptWorkspace(nextWorkspace) {
   selectedChapterId = state.chapters[0]?.id || null;
 }
 
+function purgeDeletedProjects(workspaceSnapshot) {
+  const deletedProjectIds = new Set((workspaceSnapshot.deletedProjectIds || []).map(String));
+  const projects = workspaceSnapshot.projects.filter((project) => !deletedProjectIds.has(project.project.id));
+  const activeProjectId = projects.some((project) => project.project.id === workspaceSnapshot.activeProjectId)
+    ? workspaceSnapshot.activeProjectId
+    : projects[0]?.project.id || "";
+  return { ...workspaceSnapshot, activeProjectId, projects, changed: projects.length !== workspaceSnapshot.projects.length || activeProjectId !== workspaceSnapshot.activeProjectId };
+}
+
 async function initializeStorage() {
   try {
     storageDb = await openStorageDatabase();
-    const storedWorkspace = await readIndexedDbWorkspace(storageDb);
+    const storedWorkspace = purgeDeletedProjects(await readIndexedDbWorkspace(storageDb));
+    if (storedWorkspace.changed) await writeAllProjectsToIndexedDb(storedWorkspace);
     if (storedWorkspace.projects.length) {
       const reconciledWorkspace = reconcileStoredWorkspaces(storedWorkspace, readLegacyWorkspace());
       if (reconciledWorkspace.changed) await writeAllProjectsToIndexedDb(reconciledWorkspace);
@@ -553,7 +575,9 @@ async function initializeStorage() {
       }
       adoptWorkspace(reconciledWorkspace);
     } else {
-      await writeAllProjectsToIndexedDb(workspace);
+      const initialWorkspace = purgeDeletedProjects(workspace);
+      await writeAllProjectsToIndexedDb(initialWorkspace);
+      adoptWorkspace(initialWorkspace);
     }
     storageMode = "indexeddb";
     storageState = "saved";
@@ -575,6 +599,8 @@ function persist({ deleteProjectId = "" } = {}) {
   workspace.activeProjectId = state.project.id;
   workspace.projects = workspace.projects.map((project) => project.project.id === state.project.id ? state : project);
   const projectSnapshot = normalizeProject(JSON.parse(JSON.stringify(state)));
+  state = projectSnapshot;
+  workspace.projects = workspace.projects.map((project) => project.project.id === state.project.id ? state : project);
   const activeProjectId = workspace.activeProjectId;
   const version = ++saveVersion;
   pendingWrites += 1;
@@ -678,7 +704,25 @@ function wordCount(value = "") {
   return words ? words.length : 0;
 }
 
-function sourceWordCount(source) { return Number(source.wordCount) || wordCount(source.content || ""); }
+function isPdfSource(source) {
+  return String(source?.format || "").toLowerCase() === "pdf" || String(source?.kind || "").toLowerCase().includes("pdf");
+}
+
+function sourcePageTexts(source) {
+  return Array.isArray(source?.pageTexts) ? source.pageTexts : [];
+}
+
+function sourceWordCount(source) {
+  const storedCount = Number(source.wordCount);
+  if (Number.isFinite(storedCount) && storedCount > 0) return Math.round(storedCount);
+  const pageCount = sourcePageTexts(source).reduce((total, page) => total + wordCount(page.text), 0);
+  return pageCount || wordCount(source.content || "");
+}
+
+function sourceSearchText(source) {
+  const pageText = sourcePageTexts(source).map((page) => page.text).join(" ");
+  return [source.title, source.kind, source.author, source.location, source.url, source.edition, source.publisher, source.year, source.note, source.excerpt, pageText || source.content].join(" ").toLowerCase();
+}
 
 function totalWords() {
   return state.chapters.reduce((sum, chapter) => sum + wordCount(chapter.draft), 0);
@@ -728,19 +772,19 @@ async function extractPdfText(file) {
   } finally {
     try { await pdf.destroy(); } catch { /* El texto ya fue extraído. */ }
   }
-  return { pageCount, pageTexts, content: pageTexts.map((page) => `[Página ${page.page}]\n${page.text}`).join("\n\n") };
+  return { pageCount, pageTexts };
 }
 
 function sourceTextMarkup(source) {
-  const pageTexts = Array.isArray(source.pageTexts) ? source.pageTexts : [];
+  const pageTexts = sourcePageTexts(source);
   if (pageTexts.length) {
     const pageSummary = source.pageCount && pageTexts.length < source.pageCount
       ? `Leer texto extraído · ${pageTexts.length} de ${source.pageCount} páginas`
       : `Leer texto extraído · ${pageTexts.length} páginas`;
-    return `<details class="source-full-text"><summary>${pageSummary}</summary><div class="source-pages">${pageTexts.map((page) => `<section class="source-page" data-page="${escapeHtml(page.page)}"><div class="source-page-label">Página ${escapeHtml(page.page)}</div><pre class="source-page-text">${escapeHtml(page.text)}</pre></section>`).join("")}</div><div class="source-reader-hint">Seleccioná un pasaje de una página y después elegí “Crear evidencia desde este texto”. La ubicación se completará como “p. N”.</div></details>`;
+    return `<details class="source-full-text"><summary>${pageSummary}</summary><div class="source-extraction-warning"><strong>Texto extraído automáticamente.</strong> Verificá el pasaje contra el PDF antes de citarlo literalmente.</div><div class="source-pages">${pageTexts.map((page) => `<section class="source-page" data-page="${escapeHtml(page.page)}"><div class="source-page-label">Página ${escapeHtml(page.page)}</div><pre class="source-page-text">${escapeHtml(page.text)}</pre></section>`).join("")}</div><div class="source-reader-hint">Seleccioná un pasaje de una página y después elegí “Crear evidencia desde este texto”. La ubicación se completará como “p. N” o “pp. N-M” si cruza páginas.</div></details>`;
   }
   if (source.content) return `<details class="source-full-text"><summary>Leer contenido completo</summary><pre>${escapeHtml(source.content)}</pre><div class="source-reader-hint">Seleccioná un pasaje y después elegí “Crear evidencia desde este texto”.</div></details>`;
-  if (source.format === "pdf" || source.kind.toLowerCase().includes("pdf")) {
+  if (isPdfSource(source)) {
     return `<div class="source-empty-content">No se encontró texto seleccionable. Puede ser un PDF escaneado; Cronista todavía no hace OCR.</div>`;
   }
   return `<div class="source-empty-content">Contenido completo no incorporado</div>`;
@@ -932,7 +976,7 @@ function sourceCard(source) {
   const hasFullText = Boolean(source.content || (Array.isArray(source.pageTexts) && source.pageTexts.length));
   const citation = sourceCitation(source);
   const archivedLabel = source.archived ? `<span class="status-pill pendiente">Archivada</span>` : "";
-  const pageMeta = source.pageCount ? `<span class="meta-chip">${source.pageTexts.length} de ${source.pageCount} páginas con texto</span>` : "";
+  const pageMeta = source.pageCount ? `<span class="meta-chip">${sourcePageTexts(source).length} de ${source.pageCount} páginas con texto</span>` : "";
   return `<article class="source-card ${source.archived ? "is-archived" : ""}" data-source-id="${escapeHtml(source.id)}"><div class="source-card-top"><div><div class="source-kind">${escapeHtml(source.kind)}</div><h3>${escapeHtml(source.title)}</h3><div class="source-author">${escapeHtml(source.author || "Procedencia no indicada")}</div></div><div class="source-badge">${source.imported ? "Importada" : "Conectada"}</div></div><div class="source-meta"><span class="meta-chip">${escapeHtml(source.pages || "Sin paginar")}</span>${pageMeta}${words ? `<span class="meta-chip">${words.toLocaleString("es-UY")} palabras conservadas</span>` : ""}${archivedLabel}</div><p class="source-citation">${escapeHtml(citation)}${source.accessedAt ? ` · Consultada el ${escapeHtml(source.accessedAt)}` : ""}</p><p class="source-note">${escapeHtml(source.note || "Sin nota de trabajo todavía.")}</p>${source.location ? sourceLocationMarkup(source.location) : ""}${source.url ? sourceLocationMarkup(source.url) : ""}${source.excerpt ? `<div class="source-preview">${escapeHtml(source.excerpt)}</div>` : ""}${sourceTextMarkup(source)}<div class="source-card-actions"><button class="text-button" data-action="compose-evidence" data-source-id="${escapeHtml(source.id)}">${hasFullText ? "Crear evidencia desde este texto" : "Crear evidencia vinculada"}</button><button class="text-button" data-action="edit-source" data-source-id="${escapeHtml(source.id)}">Editar</button><button class="text-button danger-text" data-action="delete-source" data-source-id="${escapeHtml(source.id)}">Eliminar</button></div></article>`;
 }
 
@@ -947,7 +991,7 @@ function chapterEditor(chapter, index) {
 function filteredSources() {
   const query = sourceFilter.trim().toLowerCase();
   if (!query) return state.sources;
-  return state.sources.filter((source) => [source.title, source.kind, source.author, source.location, source.url, source.edition, source.publisher, source.year, source.note, source.excerpt, source.content].join(" ").toLowerCase().includes(query));
+  return state.sources.filter((source) => sourceSearchText(source).includes(query));
 }
 
 function sourceGridMarkup() {
@@ -1048,7 +1092,14 @@ function openSourceDialog(sourceId = "") {
   const dialog = $("#source-dialog");
   const form = $("#source-form");
   const source = sourceId ? sourceById(sourceId) : null;
+  const contentField = $("#source-content-field");
+  const contentInput = form.elements.content;
   form.reset();
+  if (contentField) contentField.hidden = false;
+  if (contentInput) {
+    contentInput.readOnly = false;
+    contentInput.title = "";
+  }
   form.elements.sourceId.value = source?.id || "";
   $("#source-dialog-kicker").textContent = source ? "Editar fuente" : "Nueva fuente";
   $("#source-dialog-title").textContent = source ? "Revisar material del proyecto" : "Sumar material al proyecto";
@@ -1057,6 +1108,13 @@ function openSourceDialog(sourceId = "") {
     ["title", "kind", "author", "location", "url", "edition", "publisher", "year", "accessedAt", "note", "content"].forEach((field) => {
       if (form.elements[field]) form.elements[field].value = source[field] || "";
     });
+    if (isPdfSource(source)) {
+      if (contentField) contentField.hidden = true;
+      if (contentInput) {
+        contentInput.readOnly = true;
+        contentInput.title = "La extracción PDF se conserva por página y no se edita desde esta ficha.";
+      }
+    }
   }
   dialog.showModal();
 }
@@ -1082,7 +1140,7 @@ function exportProject() {
 }
 
 function exportJson() {
-  const payload = JSON.stringify(state, null, 2);
+  const payload = JSON.stringify(normalizeProject(JSON.parse(JSON.stringify(state))), null, 2);
   const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1137,9 +1195,16 @@ document.addEventListener("mouseup", (event) => {
   const textContainer = event.target.closest(".source-full-text pre, .source-page-text");
   if (!textContainer) return;
   const sourceCard = textContainer.closest(".source-card");
-  const text = window.getSelection()?.toString().trim() || "";
+  const selection = window.getSelection();
+  const text = selection?.toString().trim() || "";
+  if (!sourceCard || !text) return;
+  const selectedPages = selection?.rangeCount ? [...sourceCard.querySelectorAll(".source-page[data-page]")].filter((page) => {
+    try { return selection.getRangeAt(0).intersectsNode(page.querySelector(".source-page-text")); } catch { return false; }
+  }) : [];
+  const pageNumbers = selectedPages.map((page) => Number(page.dataset.page)).filter((page) => Number.isFinite(page));
   const page = textContainer.closest("[data-page]")?.dataset.page || "";
-  if (sourceCard && text) selectedSourceSelection = { sourceId: sourceCard.dataset.sourceId, text, location: page ? `p. ${page}` : "" };
+  const location = pageNumbers.length > 1 ? `pp. ${pageNumbers[0]}–${pageNumbers[pageNumbers.length - 1]}` : pageNumbers.length === 1 ? `p. ${pageNumbers[0]}` : "";
+  selectedSourceSelection = { sourceId: sourceCard.dataset.sourceId, text, location };
 });
 
 document.addEventListener("input", (event) => {
@@ -1219,7 +1284,11 @@ $("#source-form").addEventListener("submit", (event) => {
   const content = String(form.get("content") || "").trim();
   const sourceId = String(form.get("sourceId") || "").trim();
   const existingSource = sourceId ? sourceById(sourceId) : null;
-  const sourceData = { title, kind: String(form.get("kind") || "Fuente").trim(), author: String(form.get("author") || "Procedencia no indicada").trim(), location: String(form.get("location") || "").trim(), url: String(form.get("url") || "").trim(), edition: String(form.get("edition") || "").trim(), publisher: String(form.get("publisher") || "").trim(), year: String(form.get("year") || "").trim(), accessedAt: String(form.get("accessedAt") || "").trim(), pages: existingSource?.pages || "Sin paginar", note: String(form.get("note") || "").trim(), excerpt: content.replace(/\s+/g, " ").slice(0, 430), content, format: existingSource?.format || "", pageCount: existingSource?.pageCount || 0, pageTexts: existingSource?.pageTexts || [], wordCount: wordCount(content), imported: existingSource ? Boolean(existingSource.imported) : true, archived: existingSource ? Boolean(existingSource.archived) : false };
+  const protectedPdf = existingSource && isPdfSource(existingSource);
+  const preservedContent = protectedPdf ? existingSource.content : content;
+  const preservedExcerpt = protectedPdf ? existingSource.excerpt : content.replace(/\s+/g, " ").slice(0, 430);
+  const preservedWordCount = protectedPdf ? sourceWordCount(existingSource) : wordCount(content);
+  const sourceData = { title, kind: String(form.get("kind") || "Fuente").trim(), author: String(form.get("author") || "Procedencia no indicada").trim(), location: String(form.get("location") || "").trim(), url: String(form.get("url") || "").trim(), edition: String(form.get("edition") || "").trim(), publisher: String(form.get("publisher") || "").trim(), year: String(form.get("year") || "").trim(), accessedAt: String(form.get("accessedAt") || "").trim(), pages: existingSource?.pages || "Sin paginar", note: String(form.get("note") || "").trim(), excerpt: preservedExcerpt, content: preservedContent, format: existingSource?.format || "", pageCount: existingSource?.pageCount || 0, pageTexts: existingSource?.pageTexts || [], wordCount: preservedWordCount, imported: existingSource ? Boolean(existingSource.imported) : true, archived: existingSource ? Boolean(existingSource.archived) : false };
   if (sourceId) {
     const index = state.sources.findIndex((source) => source.id === sourceId);
     if (index >= 0) state.sources[index] = { ...state.sources[index], ...sourceData };
@@ -1269,7 +1338,7 @@ $("#file-input").addEventListener("change", async (event) => {
     showToast("Extrayendo texto del PDF…");
     try {
       const extracted = await extractPdfText(file);
-      ({ pageTexts, pageCount, content: text } = extracted);
+      ({ pageTexts, pageCount } = extracted);
       note = pageTexts.length
         ? `Texto extraído localmente de ${pageTexts.length} de ${pageCount} páginas. Revisalo antes de usarlo como evidencia.`
         : "No se encontró texto seleccionable. Puede ser un PDF escaneado; Cronista todavía no hace OCR.";
@@ -1280,7 +1349,9 @@ $("#file-input").addEventListener("change", async (event) => {
       importMessage = `PDF importado, pero no se pudo extraer el texto: ${file.name}`;
     }
   }
-  const source = { id: newId("file"), title: file.name.replace(/\.[^.]+$/, "") || "Archivo importado", kind: extension.toUpperCase() === "MD" ? "Markdown importado" : `${extension.toUpperCase() || "Archivo"} importado`, author: "Archivo local", location: file.name, pages: extension === "pdf" ? (pageCount ? `${pageCount} páginas` : "PDF local") : `${Math.round(file.size / 1024)} KB`, note, excerpt: text.replace(/\s+/g, " ").trim().slice(0, 430), content: text, format: extension, pageCount, pageTexts, wordCount: wordCount(text), imported: true };
+  const excerpt = extension === "pdf" ? pageTexts.map((page) => page.text).join(" ").slice(0, 430) : text.replace(/\s+/g, " ").trim().slice(0, 430);
+  const importedWordCount = extension === "pdf" ? pageTexts.reduce((total, page) => total + wordCount(page.text), 0) : wordCount(text);
+  const source = { id: newId("file"), title: file.name.replace(/\.[^.]+$/, "") || "Archivo importado", kind: extension.toUpperCase() === "MD" ? "Markdown importado" : `${extension.toUpperCase() || "Archivo"} importado`, author: "Archivo local", location: file.name, pages: extension === "pdf" ? (pageCount ? `${pageCount} páginas` : "PDF local") : `${Math.round(file.size / 1024)} KB`, note, excerpt, content: extension === "pdf" ? "" : text, format: extension, pageCount, pageTexts, wordCount: importedWordCount, imported: true };
   state.sources.push(source);
   persist();
   event.target.value = "";

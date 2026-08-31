@@ -146,6 +146,7 @@ h3 { margin: 0; font-size: 17px; font-weight: 400; }
 .source-full-text { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 11px; }
 .source-full-text summary { cursor: pointer; color: var(--accent-dark); font: 700 11px system-ui, sans-serif; }
 .source-full-text pre { max-height: 360px; margin: 12px 0 0; padding: 13px; overflow: auto; border-radius: 7px; color: #5f5c53; background: #f3ede3; white-space: pre-wrap; font: 12px/1.55 Georgia, serif; }
+.source-extraction-warning { margin-top: 11px; padding: 9px 10px; border-left: 3px solid #d4b270; color: #716854; background: #f8f0df; font: 11px/1.45 system-ui, sans-serif; }
 .source-pages { display: grid; gap: 10px; margin-top: 12px; }
 .source-page { padding: 12px; border: 1px solid #e0d7c7; border-radius: 8px; background: #fffdf8; }
 .source-page-label { color: var(--accent); font: 700 10px system-ui, sans-serif; letter-spacing: .08em; text-transform: uppercase; }

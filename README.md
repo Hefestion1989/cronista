@@ -62,7 +62,7 @@ Si alguna vez tuvo que usar el almacenamiento de compatibilidad, al volver Index
 
 Esto no equivale a cifrado: otros procesos con acceso a la sesión de Windows podrían leer esos datos. Antes de publicar una copia, revisá las fuentes, las rutas, los textos importados y cualquier material privado.
 
-Los PDF con texto seleccionable se leen dentro del navegador mediante PDF.js, incluido localmente en `vendor/pdfjs/`. Los PDF escaneados pueden conservarse como referencia, pero esta versión todavía no hace OCR; para trabajar con ellos hace falta incorporar una transcripción revisada.
+Los PDF con texto seleccionable se leen dentro del navegador mediante PDF.js, incluido localmente en `vendor/pdfjs/`. Cronista conserva las páginas extraídas como representación canónica y genera el texto corrido sólo para tareas que lo necesitan, como una búsqueda. Los PDF escaneados pueden conservarse como referencia, pero esta versión todavía no hace OCR; para trabajar con ellos hace falta incorporar una transcripción revisada.
 
 Cronista tampoco verifica por sí solo la verdad histórica de una afirmación. La auditoría señala huecos mecánicos; la lectura crítica, el contraste documental y las decisiones narrativas siguen siendo responsabilidad de quien trabaja el libro.
 

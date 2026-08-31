@@ -31,7 +31,7 @@ En **Fuentes** podés:
 
 Desde cada tarjeta podés editar o eliminar una fuente. La ficha conserva, cuando los completás, datos bibliográficos básicos: edición, editorial o institución, año y fecha de consulta.
 
-Para cada fuente conviene dejar claro de dónde viene, qué contiene y para qué puede servir. En un PDF con texto seleccionable, abrí “Leer texto extraído” y seleccioná el pasaje dentro de su página: al crear la evidencia, Cronista completa automáticamente la ubicación como “p. N”. Un PDF escaneado puede conservarse como referencia, pero esta versión todavía no hace OCR; en ese caso agregá también una transcripción TXT o Markdown revisada.
+Para cada fuente conviene dejar claro de dónde viene, qué contiene y para qué puede servir. En un PDF con texto seleccionable, abrí “Leer texto extraído” y seleccioná el pasaje dentro de su página: al crear la evidencia, Cronista completa automáticamente la ubicación como “p. N” o “pp. N-M” si la selección atraviesa más de una página. El texto se conserva por página como base de la extracción; la advertencia visible recuerda verificarlo contra el PDF antes de citar literalmente. Un PDF escaneado puede conservarse como referencia, pero esta versión todavía no hace OCR; en ese caso agregá también una transcripción TXT o Markdown revisada.
 
 ### 3. Separá los niveles de conocimiento
 
