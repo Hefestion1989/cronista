@@ -1,5 +1,9 @@
 # Cronista
 
+**[Abrir Cronista en la web](https://cronista-estudio.hefestion.chatgpt.site/)** · acceso público.
+
+Cada persona guarda sus proyectos en su propio navegador. Para trasladarlos entre versiones o dispositivos, puede exportar e importar una copia JSON.
+
 **Cronista es una mesa de trabajo local para convertir fuentes, apuntes y borradores en libros, investigaciones y textos de estudio más claros, trazables y revisables.**
 
 No es un procesador de texto genérico ni una máquina que decide qué es verdad. Ayuda a ordenar el trabajo intelectual para que cada capítulo tenga un propósito, cada afirmación pueda volver a una fuente y cada duda quede visible.
