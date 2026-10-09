@@ -119,3 +119,7 @@ La obra original de *Ismael* figura como de dominio público en Uruguay en [Auto
 ## Licencia
 
 El código y la documentación original de este repositorio se distribuyen bajo la [licencia MIT](LICENSE). Los textos, ediciones digitalizadas, marcas y enlaces de terceros conservan sus propias condiciones. El contenido que cada usuario importe en su navegador no forma parte de este repositorio ni queda cubierto por esta licencia.
+
+## Build para ChatGPT Sites
+
+`npm run build:sites` copia la aplicación, PDF.js y los metadatos de Sites a `dist/`. No requiere instalar dependencias. El Site público enlazado arriba ya existe; este build puede servir para actualizarlo al conectarlo con su proyecto. Los proyectos guardados en IndexedDB pertenecen al origen web actual: pasar de GitHub Pages a Sites no los transfiere. Exportá una copia `.cronista.json` desde el sitio anterior e importala en el nuevo.

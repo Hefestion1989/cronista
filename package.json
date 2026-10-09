@@ -1,0 +1,8 @@
+{
+  "name": "cronista",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:sites": "node scripts/build-sites.mjs"
+  }
+}
